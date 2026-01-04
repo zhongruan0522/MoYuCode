@@ -79,20 +79,20 @@ public static class ApiEndpoints
         });
 
         tools.MapGet("/codex/token-usage", async (
-            bool forceRefresh,
             IMemoryCache cache,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken,
+            bool forceRefresh = false) =>
         {
             return await GetCodexTotalTokenUsageAsync(cache, forceRefresh, cancellationToken);
         });
 
         tools.MapGet("/codex/token-usage/daily", async (
-            int days,
-            bool forceRefresh,
             IMemoryCache cache,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken,
+            int days = 7,
+            bool forceRefresh = false) =>
         {
-            var normalizedDays = days <= 0 ? 7 : Math.Clamp(days, 1, 30);
+            var normalizedDays = Math.Clamp(days, 1, 30);
             return await GetCodexDailyTokenUsageAsync(cache, forceRefresh, normalizedDays, cancellationToken);
         });
     }

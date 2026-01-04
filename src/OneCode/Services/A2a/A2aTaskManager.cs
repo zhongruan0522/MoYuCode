@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using OneCode.Services.Codex;
 
 namespace OneCode.Services.A2a;
@@ -206,8 +207,33 @@ public sealed class A2aTaskManager
 
     private async Task RunCodexTurnAsync(A2aTaskState state, A2aTaskStartRequest request)
     {
+        using var subscription = _codexClient.Subscribe(out var events);
+        using var pumpCts = new CancellationTokenSource();
+        var pumpTask = PumpCodexEventsAsync(state, request, events, pumpCts.Token);
+
         try
         {
+            SetTaskState(state, "TASK_STATE_WORKING");
+            AppendResult(
+                state,
+                new
+                {
+                    statusUpdate = BuildStatusUpdate(
+                        taskId: request.TaskId,
+                        contextId: request.ContextId,
+                        state: "TASK_STATE_WORKING",
+                        message: new
+                        {
+                            role = "agent",
+                            messageId = $"msg-status-{request.TaskId}",
+                            taskId = request.TaskId,
+                            contextId = request.ContextId,
+                            parts = new[] { new { text = "starting" } },
+                        },
+                        final: false),
+                });
+
+            AppendSystemLog(state, request, "准备启动 Codex（app-server）…");
             var thread = await _codexSessionManager.GetOrCreateThreadAsync(
                 request.ContextId,
                 request.Cwd,
@@ -218,8 +244,15 @@ public sealed class A2aTaskManager
                 state.ThreadId = thread.ThreadId;
             }
 
-            using var subscription = _codexClient.Subscribe(out var events);
+            AppendSystemLog(state, request, $"Thread 已就绪：{thread.ThreadId}");
 
+            if (IsCancelRequested(state))
+            {
+                MarkFinalIfNeeded(state, request, "TASK_STATE_CANCELLED", "已取消");
+                return;
+            }
+
+            AppendSystemLog(state, request, "开始生成（turn/start）…");
             var turnStartResult = await _codexClient.CallAsync(
                 method: "turn/start",
                 @params: new
@@ -242,24 +275,7 @@ public sealed class A2aTaskManager
                 state.TurnId = turnId;
             }
 
-            AppendResult(
-                state,
-                new
-                {
-                    statusUpdate = BuildStatusUpdate(
-                        taskId: request.TaskId,
-                        contextId: request.ContextId,
-                        state: "TASK_STATE_WORKING",
-                        message: new
-                        {
-                            role = "agent",
-                            messageId = $"msg-status-{request.TaskId}",
-                            taskId = request.TaskId,
-                            contextId = request.ContextId,
-                            parts = new[] { new { text = "working" } },
-                        },
-                        final: false),
-                });
+            AppendSystemLog(state, request, $"Turn 已开始：{turnId}");
 
             if (ShouldInterruptAfterStart(state))
             {
@@ -273,64 +289,258 @@ public sealed class A2aTaskManager
                     CancellationToken.None);
             }
 
-            var assistantText = state.AssistantText;
-            var reasoningText = state.ReasoningText;
-            var toolOutputText = state.ToolOutputText;
+            await pumpTask;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "A2A task {TaskId} failed.", request.TaskId);
 
-            while (await events.WaitToReadAsync(CancellationToken.None))
+            MarkFinalIfNeeded(state, request, "TASK_STATE_FAILED", ex.Message);
+        }
+        finally
+        {
+            pumpCts.Cancel();
+            try
             {
-                while (events.TryRead(out var ev))
+                await pumpTask;
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+    }
+
+    private async Task PumpCodexEventsAsync(
+        A2aTaskState state,
+        A2aTaskStartRequest request,
+        ChannelReader<CodexAppServerEvent> events,
+        CancellationToken cancellationToken)
+    {
+        var assistantText = state.AssistantText;
+        var reasoningText = state.ReasoningText;
+        var toolOutputText = state.ToolOutputText;
+
+        await foreach (var ev in events.ReadAllAsync(cancellationToken))
+        {
+            if (IsFinal(state))
+            {
+                return;
+            }
+
+            if (ev is CodexAppServerEvent.StderrLine stderr)
+            {
+                var text = $"{stderr.ReceivedAtUtc:O} {stderr.Text}\n";
+                lock (state.Sync)
                 {
-                    if (ev is CodexAppServerEvent.StderrLine stderr)
+                    toolOutputText.Append(text);
+                }
+
+                AppendResult(
+                    state,
+                    new
                     {
-                        var text = $"{stderr.ReceivedAtUtc:O} {stderr.Text}\n";
-                        lock (state.Sync)
+                        artifactUpdate = BuildTextArtifactUpdate(
+                            taskId: request.TaskId,
+                            contextId: request.ContextId,
+                            artifactId: "stderr",
+                            name: "stderr",
+                            text,
+                            append: true,
+                            lastChunk: false),
+                    });
+
+                continue;
+            }
+
+            if (ev is not CodexAppServerEvent.JsonNotification notification)
+            {
+                continue;
+            }
+
+            string? expectedThreadId;
+            string? expectedTurnId;
+            lock (state.Sync)
+            {
+                expectedThreadId = state.ThreadId;
+                expectedTurnId = state.TurnId;
+            }
+
+            if (!string.IsNullOrWhiteSpace(expectedThreadId)
+                && !string.IsNullOrWhiteSpace(notification.Meta.ThreadId)
+                && !string.Equals(notification.Meta.ThreadId, expectedThreadId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(expectedTurnId)
+                && !string.IsNullOrWhiteSpace(notification.Meta.TurnId)
+                && !string.Equals(notification.Meta.TurnId, expectedTurnId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            using var msgDoc = JsonDocument.Parse(notification.RawJson);
+            var msgRoot = msgDoc.RootElement;
+            var msgMethod = TryReadString(msgRoot, "method");
+            var msgParams = TryGetObject(msgRoot, "params");
+
+            lock (state.Sync)
+            {
+                state.CodexEvents.Add(new A2aCodexEvent(notification.ReceivedAtUtc, msgMethod, notification.RawJson));
+            }
+
+            AppendResult(
+                state,
+                new
+                {
+                    artifactUpdate = new
+                    {
+                        taskId = request.TaskId,
+                        contextId = request.ContextId,
+                        append = true,
+                        lastChunk = false,
+                        artifact = new
                         {
-                            toolOutputText.Append(text);
-                        }
-
-                        AppendResult(
-                            state,
-                            new
+                            artifactId = $"artifact-events-{request.TaskId}",
+                            name = "codex-events",
+                            parts = new object[]
                             {
-                                artifactUpdate = BuildTextArtifactUpdate(
-                                    taskId: request.TaskId,
-                                    contextId: request.ContextId,
-                                    artifactId: "stderr",
-                                    name: "stderr",
-                                    text,
-                                    append: true,
-                                    lastChunk: false),
-                            });
+                                new
+                                {
+                                    data = new
+                                    {
+                                        receivedAtUtc = notification.ReceivedAtUtc,
+                                        method = msgMethod,
+                                        raw = notification.RawJson,
+                                    },
+                                },
+                            },
+                        },
+                    },
+                });
 
-                        continue;
-                    }
-
-                    if (ev is not CodexAppServerEvent.JsonNotification notification)
+            switch (msgMethod)
+            {
+                case "item/agentMessage/delta":
+                {
+                    var delta = TryReadString(msgParams, "delta") ?? string.Empty;
+                    lock (state.Sync)
                     {
-                        continue;
+                        assistantText.Append(delta);
                     }
 
-                    if (!string.Equals(notification.Meta.ThreadId, thread.ThreadId, StringComparison.Ordinal))
+                    AppendResult(
+                        state,
+                        new
+                        {
+                            statusUpdate = BuildStatusUpdate(
+                                taskId: request.TaskId,
+                                contextId: request.ContextId,
+                                state: "TASK_STATE_WORKING",
+                                message: new
+                                {
+                                    role = "agent",
+                                    messageId = request.AgentMessageId,
+                                    taskId = request.TaskId,
+                                    contextId = request.ContextId,
+                                    parts = new[] { new { text = delta } },
+                                },
+                                final: false),
+                        });
+
+                    break;
+                }
+
+                case "item/reasoning/summaryTextDelta":
+                case "item/reasoning/textDelta":
+                {
+                    var delta = TryReadString(msgParams, "delta") ?? string.Empty;
+                    lock (state.Sync)
                     {
-                        continue;
+                        reasoningText.Append(delta);
                     }
 
-                    if (!string.IsNullOrWhiteSpace(turnId)
-                        && !string.IsNullOrWhiteSpace(notification.Meta.TurnId)
-                        && !string.Equals(notification.Meta.TurnId, turnId, StringComparison.Ordinal))
+                    AppendResult(
+                        state,
+                        new
+                        {
+                            artifactUpdate = BuildTextArtifactUpdate(
+                                taskId: request.TaskId,
+                                contextId: request.ContextId,
+                                artifactId: $"artifact-reasoning-{request.TaskId}",
+                                name: "reasoning",
+                                text: delta,
+                                append: true,
+                                lastChunk: false),
+                        });
+
+                    break;
+                }
+
+                case "item/commandExecution/outputDelta":
+                {
+                    var delta = TryReadString(msgParams, "delta") ?? string.Empty;
+                    lock (state.Sync)
                     {
-                        continue;
+                        toolOutputText.Append(delta);
                     }
 
-                    using var msgDoc = JsonDocument.Parse(notification.RawJson);
-                    var msgRoot = msgDoc.RootElement;
-                    var msgMethod = TryReadString(msgRoot, "method");
-                    var msgParams = TryGetObject(msgRoot, "params");
+                    AppendResult(
+                        state,
+                        new
+                        {
+                            artifactUpdate = BuildTextArtifactUpdate(
+                                taskId: request.TaskId,
+                                contextId: request.ContextId,
+                                artifactId: $"artifact-tool-{request.TaskId}",
+                                name: "tool-output",
+                                text: delta,
+                                append: true,
+                                lastChunk: false),
+                        });
+
+                    break;
+                }
+
+                case "turn/diff/updated":
+                {
+                    var diff = TryReadString(msgParams, "diff") ?? string.Empty;
+                    lock (state.Sync)
+                    {
+                        state.DiffText = diff;
+                    }
+
+                    AppendResult(
+                        state,
+                        new
+                        {
+                            artifactUpdate = BuildTextArtifactUpdate(
+                                taskId: request.TaskId,
+                                contextId: request.ContextId,
+                                artifactId: $"artifact-diff-{request.TaskId}",
+                                name: "diff",
+                                text: diff,
+                                append: false,
+                                lastChunk: true),
+                        });
+
+                    break;
+                }
+
+                case "thread/tokenUsage/updated":
+                {
+                    var tokenUsage = TryGetObject(msgParams, "tokenUsage");
+
+                    object? tokenUsageObject = null;
+                    if (tokenUsage.ValueKind != JsonValueKind.Undefined)
+                    {
+                        tokenUsageObject = JsonSerializer.Deserialize<object>(tokenUsage.GetRawText(), _jsonOptions);
+                    }
 
                     lock (state.Sync)
                     {
-                        state.CodexEvents.Add(new A2aCodexEvent(notification.ReceivedAtUtc, msgMethod, notification.RawJson));
+                        state.TokenUsage = tokenUsageObject;
                     }
 
                     AppendResult(
@@ -341,253 +551,142 @@ public sealed class A2aTaskManager
                             {
                                 taskId = request.TaskId,
                                 contextId = request.ContextId,
-                                append = true,
-                                lastChunk = false,
+                                append = false,
+                                lastChunk = true,
                                 artifact = new
                                 {
-                                    artifactId = $"artifact-events-{request.TaskId}",
-                                    name = "codex-events",
+                                    artifactId = $"artifact-token-usage-{request.TaskId}",
+                                    name = "token-usage",
                                     parts = new object[]
                                     {
                                         new
                                         {
-                                            data = new
-                                            {
-                                                receivedAtUtc = notification.ReceivedAtUtc,
-                                                method = msgMethod,
-                                                raw = notification.RawJson,
-                                            },
+                                            data = tokenUsageObject,
                                         },
                                     },
                                 },
                             },
                         });
 
-                    switch (msgMethod)
+                    break;
+                }
+
+                case "turn/completed":
+                {
+                    var turn = TryGetObject(msgParams, "turn");
+                    var status = TryReadString(turn, "status") ?? "completed";
+                    var mapped = status switch
                     {
-                        case "item/agentMessage/delta":
+                        "failed" => "TASK_STATE_FAILED",
+                        "interrupted" => "TASK_STATE_CANCELLED",
+                        _ => "TASK_STATE_COMPLETED",
+                    };
+
+                    var fullAssistant = assistantText.ToString();
+                    var messageText = fullAssistant;
+
+                    if (string.IsNullOrWhiteSpace(messageText))
+                    {
+                        messageText = mapped switch
                         {
-                            var delta = TryReadString(msgParams, "delta") ?? string.Empty;
-                            lock (state.Sync)
-                            {
-                                assistantText.Append(delta);
-                            }
-
-                            AppendResult(
-                                state,
-                                new
-                                {
-                                    statusUpdate = BuildStatusUpdate(
-                                        taskId: request.TaskId,
-                                        contextId: request.ContextId,
-                                        state: "TASK_STATE_WORKING",
-                                        message: new
-                                        {
-                                            role = "agent",
-                                            messageId = request.AgentMessageId,
-                                            taskId = request.TaskId,
-                                            contextId = request.ContextId,
-                                            parts = new[] { new { text = delta } },
-                                        },
-                                        final: false),
-                                });
-
-                            break;
-                        }
-
-                        case "item/reasoning/summaryTextDelta":
-                        case "item/reasoning/textDelta":
-                        {
-                            var delta = TryReadString(msgParams, "delta") ?? string.Empty;
-                            lock (state.Sync)
-                            {
-                                reasoningText.Append(delta);
-                            }
-
-                            AppendResult(
-                                state,
-                                new
-                                {
-                                    artifactUpdate = BuildTextArtifactUpdate(
-                                        taskId: request.TaskId,
-                                        contextId: request.ContextId,
-                                        artifactId: $"artifact-reasoning-{request.TaskId}",
-                                        name: "reasoning",
-                                        text: delta,
-                                        append: true,
-                                        lastChunk: false),
-                                });
-
-                            break;
-                        }
-
-                        case "item/commandExecution/outputDelta":
-                        {
-                            var delta = TryReadString(msgParams, "delta") ?? string.Empty;
-                            lock (state.Sync)
-                            {
-                                toolOutputText.Append(delta);
-                            }
-
-                            AppendResult(
-                                state,
-                                new
-                                {
-                                    artifactUpdate = BuildTextArtifactUpdate(
-                                        taskId: request.TaskId,
-                                        contextId: request.ContextId,
-                                        artifactId: $"artifact-tool-{request.TaskId}",
-                                        name: "tool-output",
-                                        text: delta,
-                                        append: true,
-                                        lastChunk: false),
-                                });
-
-                            break;
-                        }
-
-                        case "turn/diff/updated":
-                        {
-                            var diff = TryReadString(msgParams, "diff") ?? string.Empty;
-                            lock (state.Sync)
-                            {
-                                state.DiffText = diff;
-                            }
-
-                            AppendResult(
-                                state,
-                                new
-                                {
-                                    artifactUpdate = BuildTextArtifactUpdate(
-                                        taskId: request.TaskId,
-                                        contextId: request.ContextId,
-                                        artifactId: $"artifact-diff-{request.TaskId}",
-                                        name: "diff",
-                                        text: diff,
-                                        append: false,
-                                        lastChunk: true),
-                                });
-
-                            break;
-                        }
-
-                        case "thread/tokenUsage/updated":
-                        {
-                            var tokenUsage = TryGetObject(msgParams, "tokenUsage");
-
-                            object? tokenUsageObject = null;
-                            if (tokenUsage.ValueKind != JsonValueKind.Undefined)
-                            {
-                                tokenUsageObject = JsonSerializer.Deserialize<object>(tokenUsage.GetRawText(), _jsonOptions);
-                            }
-
-                            lock (state.Sync)
-                            {
-                                state.TokenUsage = tokenUsageObject;
-                            }
-
-                            AppendResult(
-                                state,
-                                new
-                                {
-                                    artifactUpdate = new
-                                    {
-                                        taskId = request.TaskId,
-                                        contextId = request.ContextId,
-                                        append = false,
-                                        lastChunk = true,
-                                        artifact = new
-                                        {
-                                            artifactId = $"artifact-token-usage-{request.TaskId}",
-                                            name = "token-usage",
-                                            parts = new object[]
-                                            {
-                                                new
-                                                {
-                                                    data = tokenUsageObject,
-                                                },
-                                            },
-                                        },
-                                    },
-                                });
-
-                            break;
-                        }
-
-                        case "turn/completed":
-                        {
-                            var turn = TryGetObject(msgParams, "turn");
-                            var status = TryReadString(turn, "status") ?? "completed";
-                            var mapped = status switch
-                            {
-                                "failed" => "TASK_STATE_FAILED",
-                                "interrupted" => "TASK_STATE_CANCELLED",
-                                _ => "TASK_STATE_COMPLETED",
-                            };
-
-                            var fullAssistant = assistantText.ToString();
-                            lock (state.Sync)
-                            {
-                                state.State = mapped;
-                                state.Final = true;
-                            }
-
-                            AppendResult(
-                                state,
-                                new
-                                {
-                                    statusUpdate = BuildStatusUpdate(
-                                        taskId: request.TaskId,
-                                        contextId: request.ContextId,
-                                        state: mapped,
-                                        message: new
-                                        {
-                                            role = "agent",
-                                            messageId = request.AgentMessageId,
-                                            taskId = request.TaskId,
-                                            contextId = request.ContextId,
-                                            parts = new[] { new { text = fullAssistant } },
-                                        },
-                                        final: true),
-                                },
-                                markFinal: true);
-
-                            return;
-                        }
+                            "TASK_STATE_FAILED" => TryReadString(TryGetObject(turn, "error"), "message")
+                                ?? "任务失败",
+                            "TASK_STATE_CANCELLED" => "已取消",
+                            _ => "完成（无文本输出）",
+                        };
                     }
+
+                    MarkFinalIfNeeded(state, request, mapped, messageText);
+                    return;
                 }
             }
         }
-        catch (Exception ex)
+    }
+
+    private static void SetTaskState(A2aTaskState state, string taskState)
+    {
+        lock (state.Sync)
         {
-            _logger.LogError(ex, "A2A task {TaskId} failed.", request.TaskId);
-
-            lock (state.Sync)
-            {
-                state.State = "TASK_STATE_FAILED";
-                state.Final = true;
-            }
-
-            AppendResult(
-                state,
-                new
-                {
-                    statusUpdate = BuildStatusUpdate(
-                        taskId: request.TaskId,
-                        contextId: request.ContextId,
-                        state: "TASK_STATE_FAILED",
-                        message: new
-                        {
-                            role = "agent",
-                            messageId = request.AgentMessageId,
-                            taskId = request.TaskId,
-                            contextId = request.ContextId,
-                            parts = new[] { new { text = ex.Message } },
-                        },
-                        final: true),
-                },
-                markFinal: true);
+            state.State = taskState;
         }
+    }
+
+    private static bool IsFinal(A2aTaskState state)
+    {
+        lock (state.Sync)
+        {
+            return state.Final;
+        }
+    }
+
+    private static bool IsCancelRequested(A2aTaskState state)
+    {
+        lock (state.Sync)
+        {
+            return state.CancelRequested;
+        }
+    }
+
+    private void AppendSystemLog(A2aTaskState state, A2aTaskStartRequest request, string message)
+    {
+        var line = $"{DateTimeOffset.UtcNow:O} [onecode] {message}\n";
+        lock (state.Sync)
+        {
+            state.ToolOutputText.Append(line);
+        }
+
+        AppendResult(
+            state,
+            new
+            {
+                artifactUpdate = BuildTextArtifactUpdate(
+                    taskId: request.TaskId,
+                    contextId: request.ContextId,
+                    artifactId: $"artifact-tool-{request.TaskId}",
+                    name: "tool-output",
+                    text: line,
+                    append: true,
+                    lastChunk: false),
+            });
+    }
+
+    private void MarkFinalIfNeeded(A2aTaskState state, A2aTaskStartRequest request, string mappedState, string messageText)
+    {
+        var shouldAppend = false;
+        lock (state.Sync)
+        {
+            if (!state.Final)
+            {
+                state.State = mappedState;
+                state.Final = true;
+                shouldAppend = true;
+            }
+        }
+
+        if (!shouldAppend)
+        {
+            return;
+        }
+
+        AppendResult(
+            state,
+            new
+            {
+                statusUpdate = BuildStatusUpdate(
+                    taskId: request.TaskId,
+                    contextId: request.ContextId,
+                    state: mappedState,
+                    message: new
+                    {
+                        role = "agent",
+                        messageId = request.AgentMessageId,
+                        taskId = request.TaskId,
+                        contextId = request.ContextId,
+                        parts = new[] { new { text = messageText } },
+                    },
+                    final: true),
+            },
+            markFinal: true);
     }
 
     private bool ShouldInterruptAfterStart(A2aTaskState state)

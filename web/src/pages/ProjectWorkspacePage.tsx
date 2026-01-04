@@ -264,7 +264,7 @@ async function* readSseText(response: Response): AsyncGenerator<string, void, un
       const rawLine = buffer.slice(0, idx)
       buffer = buffer.slice(idx + 1)
 
-      const line = rawLine.replace(/\r$/, '')
+      const line = rawLine.replace(/\r$/, '').replace(/^\uFEFF/, '')
       if (!line) {
         if (dataLines.length) {
           yield dataLines.join('\n')
@@ -531,7 +531,7 @@ function ProjectChatAndDetails({ project }: { project: ProjectDto }) {
 
   return (
     <>
-      <section className="min-w-0 flex-1 overflow-hidden rounded-lg border bg-card flex flex-col">
+      <section className="relative min-w-0 flex-1 overflow-hidden rounded-lg border bg-card flex flex-col">
         <div className="flex items-center justify-between gap-2 border-b px-4 py-2">
           <div className="min-w-0">
             <div className="truncate text-sm font-medium">{project.name}</div>
@@ -550,7 +550,7 @@ function ProjectChatAndDetails({ project }: { project: ProjectDto }) {
           </div>
         ) : null}
 
-        <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-4 pt-6 pb-6">
+        <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-4 pt-6 pb-40">
           {messages.length ? null : (
             <div className="flex h-full min-h-[160px] items-center justify-center text-center">
               <div className="max-w-sm text-sm text-muted-foreground">
@@ -585,9 +585,9 @@ function ProjectChatAndDetails({ project }: { project: ProjectDto }) {
           </div>
         </div>
 
-        <div className="border-t bg-card px-4 pb-4 pt-3">
-          <div className="mx-auto max-w-3xl">
-            <div className="rounded-2xl border bg-background p-2 shadow-lg">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-card via-card/80 to-transparent px-4 pb-4 pt-10">
+          <div className="pointer-events-auto mx-auto max-w-3xl">
+            <div className="rounded-2xl border bg-background/80 p-2 shadow-lg backdrop-blur">
               <div className="flex items-end gap-2">
                 <textarea
                   className="min-h-[44px] max-h-[180px] w-full flex-1 resize-none rounded-xl bg-background px-3 py-2 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2"

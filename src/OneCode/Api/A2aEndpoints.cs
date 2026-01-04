@@ -146,7 +146,8 @@ public static class A2aEndpoints
         response.Headers.Append("X-Accel-Buffering", "no");
         response.ContentType = "text/event-stream";
 
-        await using var writer = new StreamWriter(response.Body, Encoding.UTF8, leaveOpen: true);
+        var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        await using var writer = new StreamWriter(response.Body, utf8NoBom, leaveOpen: true);
         var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 
         async Task<bool> TrySendErrorAsync(int code, string message, object? data = null)
@@ -219,7 +220,8 @@ public static class A2aEndpoints
         response.Headers.Append("X-Accel-Buffering", "no");
         response.ContentType = "text/event-stream";
 
-        await using var writer = new StreamWriter(response.Body, Encoding.UTF8, leaveOpen: true);
+        var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        await using var writer = new StreamWriter(response.Body, utf8NoBom, leaveOpen: true);
         var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 
         async Task<bool> TrySendErrorAsync(int code, string message, object? data = null)
@@ -583,4 +585,3 @@ public static class A2aEndpoints
         }
     }
 }
-

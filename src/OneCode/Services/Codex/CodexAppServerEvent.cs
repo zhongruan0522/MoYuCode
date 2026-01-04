@@ -22,7 +22,8 @@ public sealed record CodexAppServerMessageMeta(
     public static CodexAppServerMessageMeta From(JsonElement root, string? method)
     {
         var threadId = TryReadString(root, "params", "threadId")
-            ?? TryReadString(root, "params", "thread", "id");
+            ?? TryReadString(root, "params", "thread", "id")
+            ?? TryReadString(root, "params", "conversationId");
 
         var turnId = TryReadString(root, "params", "turnId")
             ?? TryReadString(root, "params", "turn", "id");
@@ -45,4 +46,3 @@ public sealed record CodexAppServerMessageMeta(
         return current.ValueKind == JsonValueKind.String ? current.GetString() : null;
     }
 }
-

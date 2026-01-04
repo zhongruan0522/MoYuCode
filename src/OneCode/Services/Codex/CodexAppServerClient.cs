@@ -1,15 +1,20 @@
 using System.Collections.Concurrent;
+using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
+using Microsoft.Extensions.Configuration;
 
 namespace OneCode.Services.Codex;
 
 public sealed class CodexAppServerClient : IAsyncDisposable
 {
     private readonly ILogger<CodexAppServerClient> _logger;
+    private readonly IConfiguration _configuration;
+    private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromMinutes(2);
 
     private readonly SemaphoreSlim _startLock = new(1, 1);
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
@@ -27,9 +32,10 @@ public sealed class CodexAppServerClient : IAsyncDisposable
     private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonElement>> _pending = new();
     private readonly ConcurrentDictionary<Guid, Channel<CodexAppServerEvent>> _subscribers = new();
 
-    public CodexAppServerClient(ILogger<CodexAppServerClient> logger)
+    public CodexAppServerClient(ILogger<CodexAppServerClient> logger, IConfiguration configuration)
     {
         _logger = logger;
+        _configuration = configuration;
     }
 
     public async Task EnsureStartedAsync(CancellationToken cancellationToken)
@@ -102,6 +108,10 @@ public sealed class CodexAppServerClient : IAsyncDisposable
         await DisposeProcessAsync();
 
         var startInfo = CreateCodexStartInfo();
+        _logger.LogInformation(
+            "Starting codex app-server: {FileName} {Args}",
+            startInfo.FileName,
+            string.Join(' ', startInfo.ArgumentList));
 
         var process = new Process
         {
@@ -109,13 +119,27 @@ public sealed class CodexAppServerClient : IAsyncDisposable
             EnableRaisingEvents = true,
         };
 
-        if (!process.Start())
+        try
         {
-            throw new InvalidOperationException("Failed to start codex app-server.");
+            if (!process.Start())
+            {
+                throw new InvalidOperationException("Failed to start codex app-server.");
+            }
+        }
+        catch (Win32Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Failed to start codex app-server (FileName: {startInfo.FileName}). " +
+                "Ensure Codex CLI is installed and on PATH (e.g. `npm install -g @openai/codex`), " +
+                "or set `Codex:ExecutablePath` in appsettings / environment variables.",
+                ex);
         }
 
         _process = process;
         _stdin = process.StandardInput;
+        // codex app-server expects LF-delimited JSON on stdin, even on Windows.
+        // Using the default CRLF from StreamWriter.WriteLine can cause parse failures.
+        _stdin.NewLine = "\n";
         _shutdownCts = new CancellationTokenSource();
 
         _stdoutLoop = Task.Run(() => ReadStdoutLoopAsync(process, _shutdownCts.Token), CancellationToken.None);
@@ -130,8 +154,9 @@ public sealed class CodexAppServerClient : IAsyncDisposable
         };
     }
 
-    private static ProcessStartInfo CreateCodexStartInfo()
+    private ProcessStartInfo CreateCodexStartInfo()
     {
+        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
         var startInfo = new ProcessStartInfo
         {
             UseShellExecute = false,
@@ -139,31 +164,59 @@ public sealed class CodexAppServerClient : IAsyncDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,
-            StandardInputEncoding = Encoding.UTF8,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
+            StandardInputEncoding = utf8,
+            StandardOutputEncoding = utf8,
+            StandardErrorEncoding = utf8,
         };
+
+        var configuredExecutable = (_configuration["Codex:ExecutablePath"] ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(configuredExecutable))
+        {
+            ConfigureCodexStartInfo(startInfo, configuredExecutable);
+            return startInfo;
+        }
 
         if (OperatingSystem.IsWindows())
         {
-            // `npm i -g @openai/codex` installs a `.cmd` shim under `%APPDATA%\npm`.
+            // Prefer launching the bundled native binary directly.
+            // The `.cmd` shim + `cmd.exe /c` layer can interfere with stdio when
+            // the parent process uses redirected pipes.
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+            var npmBin = Path.Combine(appData, "npm");
+            var fallbackNpmBin = Path.Combine(localAppData, "npm");
+            if (!Directory.Exists(npmBin) && Directory.Exists(fallbackNpmBin))
+            {
+                npmBin = fallbackNpmBin;
+            }
+
+            var codexExe = ResolveWindowsVendorCodexExe(npmBin);
+            if (!File.Exists(codexExe) && Directory.Exists(fallbackNpmBin))
+            {
+                var altCodexExe = ResolveWindowsVendorCodexExe(fallbackNpmBin);
+                if (File.Exists(altCodexExe))
+                {
+                    npmBin = fallbackNpmBin;
+                    codexExe = altCodexExe;
+                }
+            }
+
+            if (File.Exists(codexExe))
+            {
+                startInfo.FileName = codexExe;
+                startInfo.ArgumentList.Add("app-server");
+                return startInfo;
+            }
+
+            // Fallback: `npm i -g @openai/codex` installs a `.cmd` shim under `%APPDATA%\npm`.
             // `ProcessStartInfo` cannot execute `.cmd` directly with `UseShellExecute=false`,
             // so we invoke through `cmd.exe /c`.
-            var npmBin = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm");
             var codexCmd = Path.Combine(npmBin, "codex.cmd");
 
             startInfo.FileName = "cmd.exe";
             startInfo.ArgumentList.Add("/c");
-
-            if (File.Exists(codexCmd))
-            {
-                startInfo.ArgumentList.Add(codexCmd);
-            }
-            else
-            {
-                startInfo.ArgumentList.Add("codex");
-            }
-
+            startInfo.ArgumentList.Add(File.Exists(codexCmd) ? codexCmd : "codex");
             startInfo.ArgumentList.Add("app-server");
 
             if (Directory.Exists(npmBin))
@@ -185,6 +238,131 @@ public sealed class CodexAppServerClient : IAsyncDisposable
         startInfo.FileName = "codex";
         startInfo.ArgumentList.Add("app-server");
         return startInfo;
+    }
+
+    private static void ConfigureCodexStartInfo(ProcessStartInfo startInfo, string configuredExecutable)
+    {
+        startInfo.ArgumentList.Clear();
+
+        if (OperatingSystem.IsWindows())
+        {
+            var ext = Path.GetExtension(configuredExecutable);
+            var isCmdShim = string.Equals(ext, ".cmd", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(ext, ".bat", StringComparison.OrdinalIgnoreCase);
+
+            if (isCmdShim || !Path.IsPathRooted(configuredExecutable))
+            {
+                startInfo.FileName = "cmd.exe";
+                startInfo.ArgumentList.Add("/c");
+                startInfo.ArgumentList.Add(configuredExecutable);
+                startInfo.ArgumentList.Add("app-server");
+
+                var parent = Path.IsPathRooted(configuredExecutable)
+                    ? Path.GetDirectoryName(configuredExecutable)
+                    : null;
+                if (!string.IsNullOrWhiteSpace(parent))
+                {
+                    EnsurePathContains(startInfo, parent);
+                }
+
+                return;
+            }
+        }
+
+        startInfo.FileName = configuredExecutable;
+        startInfo.ArgumentList.Add("app-server");
+    }
+
+    private static void EnsurePathContains(ProcessStartInfo startInfo, string directory)
+    {
+        if (!Directory.Exists(directory))
+        {
+            return;
+        }
+
+        var existingPath = startInfo.Environment.TryGetValue("PATH", out var v) ? v : null;
+        existingPath ??= Environment.GetEnvironmentVariable("PATH");
+        existingPath ??= string.Empty;
+
+        if (existingPath.Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Contains(directory, StringComparer.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        startInfo.Environment["PATH"] = $"{directory};{existingPath}";
+    }
+
+    private static string ResolveWindowsVendorCodexExe(string npmBin)
+    {
+        var vendorTriple = GetWindowsVendorTriple();
+
+        var candidate = Path.Combine(
+            npmBin,
+            "node_modules",
+            "@openai",
+            "codex",
+            "vendor",
+            vendorTriple,
+            "codex",
+            "codex.exe");
+
+        if (File.Exists(candidate))
+        {
+            return candidate;
+        }
+
+        if (!string.Equals(vendorTriple, "x86_64-pc-windows-msvc", StringComparison.OrdinalIgnoreCase))
+        {
+            var x64Candidate = Path.Combine(
+                npmBin,
+                "node_modules",
+                "@openai",
+                "codex",
+                "vendor",
+                "x86_64-pc-windows-msvc",
+                "codex",
+                "codex.exe");
+
+            if (File.Exists(x64Candidate))
+            {
+                return x64Candidate;
+            }
+        }
+
+        if (!string.Equals(vendorTriple, "aarch64-pc-windows-msvc", StringComparison.OrdinalIgnoreCase))
+        {
+            var armCandidate = Path.Combine(
+                npmBin,
+                "node_modules",
+                "@openai",
+                "codex",
+                "vendor",
+                "aarch64-pc-windows-msvc",
+                "codex",
+                "codex.exe");
+
+            if (File.Exists(armCandidate))
+            {
+                return armCandidate;
+            }
+        }
+
+        return candidate;
+    }
+
+    private static string GetWindowsVendorTriple()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return "x86_64-pc-windows-msvc";
+        }
+
+        return RuntimeInformation.ProcessArchitecture switch
+        {
+            Architecture.Arm64 => "aarch64-pc-windows-msvc",
+            _ => "x86_64-pc-windows-msvc",
+        };
     }
 
     private async Task InitializeAsync(CancellationToken cancellationToken)
@@ -218,17 +396,24 @@ public sealed class CodexAppServerClient : IAsyncDisposable
         {
             var request = new JsonRpcRequest
             {
-                Jsonrpc = "2.0",
                 Id = id,
                 Method = method,
                 Params = @params,
             };
 
             var json = JsonSerializer.Serialize(request, _jsonOptions);
+            _logger.LogDebug("codex -> {Method} (id={Id})", method, id);
             await stdin.WriteLineAsync(json);
             await stdin.FlushAsync(cancellationToken);
 
-            return await tcs.Task.WaitAsync(cancellationToken);
+            try
+            {
+                return await tcs.Task.WaitAsync(DefaultRequestTimeout, cancellationToken);
+            }
+            catch (TimeoutException ex)
+            {
+                throw new TimeoutException($"codex app-server request timed out: {method} (id={id})", ex);
+            }
         }
         catch
         {
@@ -276,6 +461,7 @@ public sealed class CodexAppServerClient : IAsyncDisposable
                     break;
                 }
 
+                _logger.LogWarning("codex[stderr] {Line}", line);
                 Publish(new CodexAppServerEvent.StderrLine(DateTimeOffset.UtcNow, line));
             }
         }
@@ -306,6 +492,7 @@ public sealed class CodexAppServerClient : IAsyncDisposable
                 && TryGetIntId(idProp, out var id)
                 && _pending.TryRemove(id, out var tcs))
             {
+                _logger.LogDebug("codex <- response (id={Id})", id);
                 tcs.TrySetResult(root.Clone());
                 return;
             }
@@ -315,10 +502,19 @@ public sealed class CodexAppServerClient : IAsyncDisposable
                 : null;
 
             var meta = CodexAppServerMessageMeta.From(root, method);
+            if (!string.IsNullOrWhiteSpace(method))
+            {
+                _logger.LogDebug(
+                    "codex <- notification {Method} (threadId={ThreadId} turnId={TurnId})",
+                    method,
+                    meta.ThreadId,
+                    meta.TurnId);
+            }
             Publish(new CodexAppServerEvent.JsonNotification(DateTimeOffset.UtcNow, line, meta));
         }
         catch (JsonException)
         {
+            _logger.LogWarning("codex stdout non-JSON: {Line}", line);
             Publish(new CodexAppServerEvent.StderrLine(DateTimeOffset.UtcNow, line));
         }
     }
@@ -420,7 +616,6 @@ public sealed class CodexAppServerClient : IAsyncDisposable
 
     private sealed record JsonRpcRequest
     {
-        public required string Jsonrpc { get; init; }
         public required int Id { get; init; }
         public required string Method { get; init; }
         public object? Params { get; init; }
