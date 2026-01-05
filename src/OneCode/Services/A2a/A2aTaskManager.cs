@@ -253,6 +253,7 @@ public sealed class A2aTaskManager
             }
 
             AppendSystemLog(state, request, "开始生成（turn/start）…");
+            var turnInputs = BuildTurnInputs(request);
             var turnStartResult = await _codexClient.CallAsync(
                 method: "turn/start",
                 @params: new
@@ -261,10 +262,7 @@ public sealed class A2aTaskManager
                     approvalPolicy = "never",
                     sandboxPolicy = new { type = "dangerFullAccess" },
                     summary = "detailed",
-                    input = new object[]
-                    {
-                        new { type = "text", text = request.UserText },
-                    },
+                    input = turnInputs,
                 },
                 CancellationToken.None);
 
@@ -707,6 +705,119 @@ public sealed class A2aTaskManager
         }
     }
 
+    private static List<object> BuildTurnInputs(A2aTaskStartRequest request)
+    {
+        var inputs = new List<object>();
+
+        var text = (request.UserText ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            inputs.Add(new { type = "text", text });
+        }
+
+        var images = request.UserImages ?? Array.Empty<A2aImageInput>();
+        foreach (var image in images)
+        {
+            if (TryResolveLocalImagePath(image, out var localPath))
+            {
+                inputs.Add(new { type = "localImage", path = localPath });
+                continue;
+            }
+
+            var url = (image.Url ?? string.Empty).Trim();
+            if (!string.IsNullOrWhiteSpace(url))
+            {
+                inputs.Add(new { type = "image", url });
+            }
+        }
+
+        if (inputs.Count == 0)
+        {
+            inputs.Add(new { type = "text", text = " " });
+        }
+
+        return inputs;
+    }
+
+    private static bool TryResolveLocalImagePath(A2aImageInput image, out string path)
+    {
+        path = string.Empty;
+
+        var id = (image.Id ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            id = TryExtractImageIdFromUrl(image.Url) ?? string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(id) || !Guid.TryParseExact(id, "N", out _))
+        {
+            return false;
+        }
+
+        var root = GetImagesRoot();
+        if (!Directory.Exists(root))
+        {
+            return false;
+        }
+
+        var candidates = new[]
+        {
+            Path.Combine(root, id),
+            Path.Combine(root, $"{id}.png"),
+            Path.Combine(root, $"{id}.jpg"),
+            Path.Combine(root, $"{id}.jpeg"),
+            Path.Combine(root, $"{id}.webp"),
+            Path.Combine(root, $"{id}.gif"),
+        };
+
+        foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (File.Exists(candidate))
+            {
+                path = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string GetImagesRoot()
+    {
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return Path.Combine(userProfile, ".one-code", "media", "images");
+    }
+
+    private static string? TryExtractImageIdFromUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return null;
+        }
+
+        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri))
+        {
+            return null;
+        }
+
+        var segments = uri.AbsolutePath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (segments.Length < 3)
+        {
+            return null;
+        }
+
+        if (!string.Equals(segments[^3], "media", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(segments[^2], "images", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var id = segments[^1];
+        return Guid.TryParseExact(id, "N", out _) ? id : null;
+    }
+
     private void AppendResult(A2aTaskState state, object resultObject, bool markFinal = false)
     {
         var resultJson = JsonSerializer.Serialize(resultObject, _jsonOptions);
@@ -806,11 +917,16 @@ public sealed class A2aTaskManager
 
 public readonly record struct A2aStoredEvent(long EventId, string ResultJson);
 
+public sealed record A2aImageInput(
+    string? Id,
+    string? Url);
+
 public sealed record A2aTaskStartRequest(
     string TaskId,
     string ContextId,
     string Cwd,
     string UserText,
+    IReadOnlyList<A2aImageInput> UserImages,
     string UserMessageId,
     string AgentMessageId);
 

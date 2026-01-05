@@ -168,10 +168,10 @@ public static class A2aEndpoints
         }
 
         var message = TryGetObject(@params, "message");
-        var userText = ExtractTextFromMessage(message);
-        if (string.IsNullOrWhiteSpace(userText))
+        var (userText, userImages) = ExtractUserInputsFromMessage(message);
+        if (string.IsNullOrWhiteSpace(userText) && userImages.Count == 0)
         {
-            await TrySendErrorAsync(code: -32602, message: "Missing user text in params.message.parts");
+            await TrySendErrorAsync(code: -32602, message: "Missing user input in params.message.parts");
             return;
         }
 
@@ -193,6 +193,7 @@ public static class A2aEndpoints
                 ContextId: contextId,
                 Cwd: cwd,
                 UserText: userText,
+                UserImages: userImages,
                 UserMessageId: userMessageId,
                 AgentMessageId: agentMessageId),
             cancellationToken);
@@ -511,16 +512,17 @@ public static class A2aEndpoints
         return default;
     }
 
-    private static string? ExtractTextFromMessage(JsonElement message)
+    private static (string Text, List<A2aImageInput> Images) ExtractUserInputsFromMessage(JsonElement message)
     {
+        var images = new List<A2aImageInput>();
         if (message.ValueKind != JsonValueKind.Object)
         {
-            return null;
+            return (string.Empty, images);
         }
 
         if (!message.TryGetProperty("parts", out var parts) || parts.ValueKind != JsonValueKind.Array)
         {
-            return null;
+            return (string.Empty, images);
         }
 
         var builder = new StringBuilder();
@@ -545,9 +547,99 @@ public static class A2aEndpoints
             {
                 builder.Append(kindTextProp.GetString());
             }
+
+            if (TryGetImageInput(part, out var image))
+            {
+                images.Add(image);
+            }
         }
 
-        return builder.Length > 0 ? builder.ToString() : null;
+        var text = builder.ToString().Trim();
+        if (images.Count == 0)
+        {
+            return (text, images);
+        }
+
+        var distinct = images
+            .Where(i => !string.IsNullOrWhiteSpace(i.Id) || !string.IsNullOrWhiteSpace(i.Url))
+            .DistinctBy(i => $"{i.Id}|{i.Url}")
+            .ToList();
+
+        return (text, distinct);
+    }
+
+    private static bool TryGetImageInput(JsonElement part, out A2aImageInput image)
+    {
+        image = default!;
+
+        if (part.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        string? kind = null;
+        if (part.TryGetProperty("kind", out var kindProp) && kindProp.ValueKind == JsonValueKind.String)
+        {
+            kind = kindProp.GetString();
+        }
+        else if (part.TryGetProperty("type", out var typeProp) && typeProp.ValueKind == JsonValueKind.String)
+        {
+            kind = typeProp.GetString();
+        }
+
+        var isImageKind = string.Equals(kind, "image", StringComparison.OrdinalIgnoreCase);
+
+        string? id = null;
+        if (part.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.String)
+        {
+            id = (idProp.GetString() ?? string.Empty).Trim();
+        }
+
+        if (string.IsNullOrWhiteSpace(id)
+            && part.TryGetProperty("imageId", out var imageIdProp)
+            && imageIdProp.ValueKind == JsonValueKind.String)
+        {
+            id = (imageIdProp.GetString() ?? string.Empty).Trim();
+        }
+
+        string? url = null;
+        if (part.TryGetProperty("imageUrl", out var imageUrlProp) && imageUrlProp.ValueKind == JsonValueKind.String)
+        {
+            url = (imageUrlProp.GetString() ?? string.Empty).Trim();
+        }
+
+        if (string.IsNullOrWhiteSpace(url)
+            && isImageKind
+            && part.TryGetProperty("url", out var urlProp)
+            && urlProp.ValueKind == JsonValueKind.String)
+        {
+            url = (urlProp.GetString() ?? string.Empty).Trim();
+        }
+
+        if (string.IsNullOrWhiteSpace(url)
+            && isImageKind
+            && part.TryGetProperty("data", out var dataProp)
+            && dataProp.ValueKind == JsonValueKind.Object
+            && dataProp.TryGetProperty("url", out var dataUrlProp)
+            && dataUrlProp.ValueKind == JsonValueKind.String)
+        {
+            url = (dataUrlProp.GetString() ?? string.Empty).Trim();
+        }
+
+        if (!isImageKind && string.IsNullOrWhiteSpace(url) && string.IsNullOrWhiteSpace(id))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(url) && string.IsNullOrWhiteSpace(id))
+        {
+            return false;
+        }
+
+        image = new A2aImageInput(
+            Id: string.IsNullOrWhiteSpace(id) ? null : id,
+            Url: string.IsNullOrWhiteSpace(url) ? null : url);
+        return true;
     }
 
     private static async Task<bool> TrySendSseAsync(

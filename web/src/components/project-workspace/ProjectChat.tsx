@@ -10,17 +10,26 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/animate-ui/primitives/animate/tooltip'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, Image as ImageIcon, X } from 'lucide-react'
 
 type ChatRole = 'user' | 'agent' | 'system'
 
 type ChatMessageKind = 'text' | 'think'
+
+type ChatImage = {
+  id: string
+  url: string
+  fileName: string
+  contentType: string
+  sizeBytes: number
+}
 
 type ChatMessage = {
   id: string
   role: ChatRole
   kind: ChatMessageKind
   text: string
+  images?: ChatImage[]
 }
 
 type CodexEventLogItem = {
@@ -88,6 +97,70 @@ function randomId(prefix = 'id'): string {
   }
 
   return `${prefix}-${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`
+}
+
+type UploadedImageDto = {
+  id: string
+  url: string
+  fileName: string
+  contentType: string
+  sizeBytes: number
+}
+
+type DraftImage = {
+  clientId: string
+  url: string
+  localObjectUrl: string
+  uploadedId: string | null
+  fileName: string
+  contentType: string
+  sizeBytes: number
+  status: 'uploading' | 'ready' | 'error'
+  error: string | null
+}
+
+const maxDraftImages = 8
+const maxDraftImageBytes = 10 * 1024 * 1024
+
+async function uploadImage(
+  apiBase: string,
+  file: File,
+  signal?: AbortSignal,
+): Promise<UploadedImageDto> {
+  const form = new FormData()
+  form.append('file', file, file.name || 'image')
+
+  const res = await fetch(`${apiBase}/media/images`, {
+    method: 'POST',
+    body: form,
+    signal,
+  })
+
+  const payload = await res.json().catch(() => null)
+  if (!res.ok) {
+    const msg =
+      payload && typeof payload === 'object' && 'message' in payload
+        ? String((payload as { message?: unknown }).message ?? '')
+        : ''
+    throw new Error(msg || `${res.status} ${res.statusText}`)
+  }
+
+  if (!Array.isArray(payload) || payload.length === 0) {
+    throw new Error('Upload failed.')
+  }
+
+  const first = payload[0] as Partial<UploadedImageDto>
+  const id = String(first.id ?? '').trim()
+  const url = String(first.url ?? '').trim()
+  const fileName = String(first.fileName ?? '').trim()
+  const contentType = String(first.contentType ?? '').trim()
+  const sizeBytes = Number(first.sizeBytes ?? 0)
+
+  if (!id || !url) {
+    throw new Error('Upload failed: missing image id/url.')
+  }
+
+  return { id, url, fileName, contentType, sizeBytes }
 }
 
 async function* readSseText(response: Response): AsyncGenerator<string, void, unknown> {
@@ -361,6 +434,7 @@ export function ProjectChat({
 
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
+  const [draftImages, setDraftImages] = useState<DraftImage[]>([])
   const [sending, setSending] = useState(false)
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
   const [canceling, setCanceling] = useState(false)
@@ -368,6 +442,8 @@ export function ProjectChat({
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const draftImagesRef = useRef<DraftImage[]>([])
 
   const [thinkOpenById, setThinkOpenById] = useState<Record<string, boolean>>({})
   const [tokenByMessageId, setTokenByMessageId] = useState<Record<string, TokenUsageArtifact>>(
@@ -381,18 +457,145 @@ export function ProjectChat({
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages])
 
+  useEffect(() => {
+    draftImagesRef.current = draftImages
+  }, [draftImages])
+
+  useEffect(() => {
+    return () => {
+      for (const img of draftImagesRef.current) {
+        if (img.localObjectUrl) {
+          try {
+            URL.revokeObjectURL(img.localObjectUrl)
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+  }, [])
+
   const updateMessageText = useCallback((messageId: string, updater: (prev: string) => string) => {
     setMessages((prev) =>
       prev.map((m) => (m.id === messageId ? { ...m, text: updater(m.text) } : m)),
     )
   }, [])
 
+  const removeDraftImage = useCallback((clientId: string) => {
+    setDraftImages((prev) => {
+      const target = prev.find((i) => i.clientId === clientId)
+      if (target?.localObjectUrl) {
+        try {
+          URL.revokeObjectURL(target.localObjectUrl)
+        } catch {
+          // ignore
+        }
+      }
+      return prev.filter((i) => i.clientId !== clientId)
+    })
+  }, [])
+
+  const addDraftImages = useCallback(
+    (files: File[]) => {
+      if (!files.length) return
+
+      setChatError(null)
+
+      setDraftImages((prev) => {
+        const slots = Math.max(0, maxDraftImages - prev.length)
+        const selected = files.slice(0, slots)
+        const next: DraftImage[] = [...prev]
+
+        for (const file of selected) {
+          const contentType = (file.type ?? '').trim()
+          const isImage = contentType.startsWith('image/')
+
+          const localObjectUrl = isImage ? URL.createObjectURL(file) : ''
+          const url = localObjectUrl
+          const tooLarge = file.size > maxDraftImageBytes
+          const clientId = randomId('img')
+
+          next.push({
+            clientId,
+            url,
+            localObjectUrl,
+            uploadedId: null,
+            fileName: file.name || 'image',
+            contentType,
+            sizeBytes: file.size,
+            status: tooLarge || !isImage ? 'error' : 'uploading',
+            error: tooLarge
+              ? `图片过大（最大 ${Math.round(maxDraftImageBytes / 1024 / 1024)}MB）`
+              : !isImage
+                ? '不是图片文件'
+                : null,
+          })
+
+          if (!tooLarge && isImage) {
+            void (async () => {
+              try {
+                const uploaded = await uploadImage(apiBase, file)
+                setDraftImages((cur) =>
+                  cur.map((img) => {
+                    if (img.clientId !== clientId) return img
+                    if (img.localObjectUrl) {
+                      try {
+                        URL.revokeObjectURL(img.localObjectUrl)
+                      } catch {
+                        // ignore
+                      }
+                    }
+                    return {
+                      ...img,
+                      url: uploaded.url,
+                      localObjectUrl: '',
+                      uploadedId: uploaded.id,
+                      fileName: uploaded.fileName || img.fileName,
+                      contentType: uploaded.contentType || img.contentType,
+                      sizeBytes: uploaded.sizeBytes || img.sizeBytes,
+                      status: 'ready',
+                      error: null,
+                    }
+                  }),
+                )
+              } catch (e) {
+                setDraftImages((cur) =>
+                  cur.map((img) =>
+                    img.clientId === clientId
+                      ? { ...img, status: 'error', error: (e as Error).message }
+                      : img,
+                  ),
+                )
+              }
+            })()
+          }
+        }
+
+        return next
+      })
+    },
+    [apiBase],
+  )
+
   const send = useCallback(async () => {
     const text = draft.trim()
-    if (!text || sending) return
+    const hasBlockingUploads = draftImages.some((img) => img.status !== 'ready')
+    const readyImages: ChatImage[] = draftImages
+      .filter((img) => img.status === 'ready' && img.uploadedId)
+      .map((img) => ({
+        id: img.uploadedId as string,
+        url: img.url,
+        fileName: img.fileName,
+        contentType: img.contentType,
+        sizeBytes: img.sizeBytes,
+      }))
+
+    if (sending) return
+    if ((!text && readyImages.length === 0) || hasBlockingUploads) return
 
     setChatError(null)
     setDraft('')
+    setDraftImages([])
     setRawEvents([])
 
     const taskId = randomId('task')
@@ -402,7 +605,13 @@ export function ProjectChat({
 
     setMessages((prev) => [
       ...prev,
-      { id: userMessageId, role: 'user', kind: 'text', text },
+      {
+        id: userMessageId,
+        role: 'user',
+        kind: 'text',
+        text,
+        ...(readyImages.length ? { images: readyImages } : {}),
+      },
       { id: agentMessageId, role: 'agent', kind: 'text', text: '' },
     ])
 
@@ -415,6 +624,15 @@ export function ProjectChat({
     abortRef.current = controller
 
     try {
+      const imageParts = readyImages.map((img) => ({
+        kind: 'image',
+        id: img.id,
+        url: img.url,
+        fileName: img.fileName,
+        contentType: img.contentType,
+        sizeBytes: img.sizeBytes,
+      }))
+
       const request = {
         jsonrpc: '2.0',
         id: randomId('req'),
@@ -428,7 +646,7 @@ export function ProjectChat({
             messageId: userMessageId,
             contextId: sessionIdRef.current,
             taskId,
-            parts: [{ text }],
+            parts: [...(text ? [{ text }] : []), ...imageParts],
           },
         },
       }
@@ -569,7 +787,7 @@ export function ProjectChat({
       setActiveTaskId(null)
       setCanceling(false)
     }
-  }, [apiBase, draft, onToolOutput, project.workspacePath, sending, updateMessageText])
+  }, [apiBase, draft, draftImages, onToolOutput, project.workspacePath, sending, updateMessageText])
 
   const cancel = useCallback(async () => {
     if (!activeTaskId || !sending || canceling) return
@@ -684,30 +902,54 @@ export function ProjectChat({
                 }
 
                 const tokenUsage = m.role === 'agent' ? tokenByMessageId[m.id] : undefined
+                const showBubble =
+                  Boolean(m.text) || (m.role === 'agent' && isActiveAgentMessage)
 
                 return (
                   <div key={m.id} className={cn('mx-auto flex w-full max-w-3xl py-1', align)}>
                     <div className="max-w-[80%]">
-                      <div
-                        className={cn(
-                          'rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-words',
-                          m.role === 'user'
-                            ? 'bg-primary text-primary-foreground'
-                            : m.role === 'agent'
-                              ? 'bg-muted text-foreground'
-                              : 'bg-accent text-accent-foreground',
-                        )}
-                      >
-                        {m.text ? (
-                          m.text
-                        ) : m.role === 'agent' && isActiveAgentMessage ? (
-                          <span className="inline-flex items-center">
-                            <Spinner />
-                          </span>
-                        ) : (
-                          ''
-                        )}
-                      </div>
+                      {showBubble ? (
+                        <div
+                          className={cn(
+                            'rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-words',
+                            m.role === 'user'
+                              ? 'bg-primary text-primary-foreground'
+                              : m.role === 'agent'
+                                ? 'bg-muted text-foreground'
+                                : 'bg-accent text-accent-foreground',
+                          )}
+                        >
+                          {m.text ? (
+                            m.text
+                          ) : m.role === 'agent' && isActiveAgentMessage ? (
+                            <span className="inline-flex items-center">
+                              <Spinner />
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      {m.images?.length ? (
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          {m.images.map((img) => (
+                            <a
+                              key={img.id}
+                              href={img.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block overflow-hidden rounded-md border bg-background/30"
+                              title={img.fileName || 'image'}
+                            >
+                              <img
+                                src={img.url}
+                                alt={img.fileName || ''}
+                                className="block h-auto w-full max-h-[260px] object-contain"
+                                loading="lazy"
+                              />
+                            </a>
+                          ))}
+                        </div>
+                      ) : null}
 
                       {tokenUsage ? (
                         <div className={cn('mt-1', align === 'justify-end' ? 'text-right' : '')}>
@@ -724,13 +966,99 @@ export function ProjectChat({
           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-card via-card/80 to-transparent px-4 pb-4 pt-10">
             <div className="pointer-events-auto mx-auto max-w-3xl">
               <div className="rounded-2xl border bg-background/80 p-2 shadow-lg backdrop-blur">
-                <div className="flex items-end gap-2">
+                <div className="space-y-2">
+                  {draftImages.length ? (
+                    <div className="flex flex-wrap gap-2 px-1">
+                      {draftImages.map((img) => (
+                        <div
+                          key={img.clientId}
+                          className={cn(
+                            'relative size-20 overflow-hidden rounded-md border bg-background/30',
+                            img.status === 'error' ? 'border-destructive' : '',
+                          )}
+                        >
+                          {img.url ? (
+                            <img
+                              src={img.url}
+                              alt={img.fileName}
+                              className="h-full w-full object-cover"
+                              draggable={false}
+                            />
+                          ) : null}
+
+                          <button
+                            type="button"
+                            className={cn(
+                              'absolute right-1 top-1 rounded-sm bg-background/70 p-1 text-muted-foreground',
+                              'hover:bg-background hover:text-foreground',
+                            )}
+                            onClick={() => removeDraftImage(img.clientId)}
+                            title="移除"
+                          >
+                            <X className="size-3" />
+                          </button>
+
+                          {img.status === 'uploading' ? (
+                            <div className="absolute inset-0 flex items-center justify-center bg-background/70">
+                              <Spinner />
+                            </div>
+                          ) : null}
+
+                          {img.status === 'error' && img.error ? (
+                            <div className="absolute inset-x-0 bottom-0 bg-destructive/80 px-1 py-0.5 text-[10px] text-white">
+                              {img.error}
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div className="flex items-end gap-2">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      disabled={sending}
+                      onChange={(e) => {
+                        const files = Array.from(e.target.files ?? [])
+                        e.target.value = ''
+                        addDraftImages(files)
+                      }}
+                    />
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      disabled={sending || draftImages.length >= maxDraftImages}
+                      onClick={() => fileInputRef.current?.click()}
+                      title="上传图片"
+                    >
+                      <ImageIcon className="size-4" />
+                      <span className="sr-only">上传图片</span>
+                    </Button>
+
                   <textarea
                     className="min-h-[44px] max-h-[180px] w-full flex-1 resize-none rounded-xl bg-background px-3 py-2 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2"
                     placeholder="输入消息，Enter 发送，Shift+Enter 换行"
                     value={draft}
                     disabled={sending}
                     onChange={(e) => setDraft(e.target.value)}
+                    onPaste={(e) => {
+                      const items = Array.from(e.clipboardData?.items ?? [])
+                      const imageFiles = items
+                        .filter((i) => i.type.startsWith('image/'))
+                        .map((i) => i.getAsFile())
+                        .filter(Boolean) as File[]
+
+                      if (imageFiles.length) {
+                        e.preventDefault()
+                        addDraftImages(imageFiles)
+                      }
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault()
@@ -748,10 +1076,19 @@ export function ProjectChat({
                       {canceling ? '停止中…' : '停止'}
                     </Button>
                   ) : (
-                    <Button type="button" onClick={() => void send()} disabled={!draft.trim()}>
+                    <Button
+                      type="button"
+                      onClick={() => void send()}
+                      disabled={
+                        (!draft.trim() &&
+                          draftImages.filter((img) => img.status === 'ready').length === 0) ||
+                        draftImages.some((img) => img.status !== 'ready')
+                      }
+                    >
                       发送
                     </Button>
                   )}
+                </div>
                 </div>
               </div>
             </div>

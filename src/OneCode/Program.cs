@@ -48,6 +48,7 @@ app.UseCors();
 app.UseWebSockets();
 app.MapOneCodeApis();
 app.MapA2a();
+app.MapMedia();
 app.MapTerminal();
 
 // Configure the HTTP request pipeline.
