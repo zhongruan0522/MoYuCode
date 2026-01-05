@@ -10,7 +10,7 @@ import {
 import { createPortal } from 'react-dom'
 import { api } from '@/api/client'
 import type { DirectoryEntryDto, FileEntryDto, ListEntriesResponse } from '@/api/types'
-import { cn } from '@/lib/utils'
+import { getVscodeFileIconUrl, getVscodeFolderIconUrls } from '@/lib/vscodeFileIcons'
 import {
   FileItem,
   Files,
@@ -33,7 +33,6 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { ProjectFileManagerPanel, type ProjectFileManagerTabKey } from './ProjectFileManagerPanel'
 import { ProjectCommitPanel } from './ProjectCommitPanel'
-import { File, Folder, type LucideIcon } from 'lucide-react'
 
 type FsEntryKind = 'file' | 'directory'
 
@@ -41,11 +40,6 @@ type FsEntryTarget = {
   kind: FsEntryKind
   name: string
   fullPath: string
-}
-
-type IconSpec = {
-  Icon: LucideIcon
-  className: string
 }
 
 function normalizePathForComparison(path: string): string {
@@ -187,39 +181,18 @@ function FsContextMenu({
   )
 }
 
-function FileLabel({ name }: { name: string }) {
-  const spec: IconSpec = useMemo(
-    () => ({
-      Icon: File,
-      className: 'text-muted-foreground',
-    }),
-    [],
-  )
+function buildVscodeIconImg(url: string | null | undefined): ReactNode | undefined {
+  const normalized = (url ?? '').trim()
+  if (!normalized) return undefined
 
-  const Icon = spec.Icon
   return (
-    <span className="flex min-w-0 items-center gap-2">
-      <Icon className={cn('size-4 shrink-0', spec.className)} />
-      <span className="truncate">{name}</span>
-    </span>
-  )
-}
-
-function DirectoryLabel({ name }: { name: string }) {
-  const spec: IconSpec = useMemo(
-    () => ({
-      Icon: Folder,
-      className: 'text-muted-foreground',
-    }),
-    [],
-  )
-
-  const Icon = spec.Icon
-  return (
-    <span className="flex min-w-0 items-center gap-2">
-      <Icon className={cn('size-4 shrink-0', spec.className)} />
-      <span className="truncate">{name}</span>
-    </span>
+    <img
+      src={normalized}
+      alt=""
+      aria-hidden="true"
+      draggable={false}
+      className="size-4.5 shrink-0"
+    />
   )
 }
 
@@ -229,12 +202,14 @@ export function ProjectFileManager({
   onRequestClose,
   onOpenFile,
   onOpenDiff,
+  onOpenTerminal,
 }: {
   workspacePath: string
   className?: string
   onRequestClose: () => void
   onOpenFile?: (path: string) => void
   onOpenDiff?: (file: string) => void
+  onOpenTerminal?: (path: string) => void
 }) {
   const [activeTab, setActiveTab] = useState<ProjectFileManagerTabKey>('files')
   const [hasGit, setHasGit] = useState(false)
@@ -428,13 +403,17 @@ export function ProjectFileManager({
 
   const handleOpenTerminal = useCallback(
     async (path: string) => {
+      if (onOpenTerminal) {
+        onOpenTerminal(path)
+        return
+      }
       try {
         await api.fs.openTerminal(path)
       } catch (e) {
         showFsNotice((e as Error).message)
       }
     },
-    [showFsNotice],
+    [onOpenTerminal, showFsNotice],
   )
 
   const handleCopyName = useCallback(
@@ -609,14 +588,16 @@ export function ProjectFileManager({
 
   const renderFile = useCallback(
     (file: FileEntryDto) => {
+      const iconUrl = getVscodeFileIconUrl(file.name)
       return (
         <FileItem
           key={file.fullPath}
+          icon={iconUrl ? buildVscodeIconImg(iconUrl) : undefined}
           onClick={() => onOpenFile?.(file.fullPath)}
           onDoubleClick={() => onOpenFile?.(file.fullPath)}
           onContextMenu={(e) => openFsMenu(e, { kind: 'file', name: file.name, fullPath: file.fullPath })}
         >
-          <FileLabel name={file.name} />
+          {file.name}
         </FileItem>
       )
     },
@@ -628,10 +609,13 @@ export function ProjectFileManager({
       const children = entriesByPath[dir.fullPath]
       const nodeLoading = Boolean(nodeLoadingByPath[dir.fullPath])
       const nodeError = nodeErrorByPath[dir.fullPath]
+      const icons = getVscodeFolderIconUrls(dir.name)
 
       return (
         <FolderItem key={dir.fullPath} value={dir.fullPath}>
           <FolderTrigger
+            closeIcon={buildVscodeIconImg(icons.closed)}
+            openIcon={buildVscodeIconImg(icons.open)}
             onClick={(e) => {
               e.stopPropagation()
               void ensureEntries(dir.fullPath)
@@ -640,7 +624,7 @@ export function ProjectFileManager({
               openFsMenu(e, { kind: 'directory', name: dir.name, fullPath: dir.fullPath })
             }
           >
-            <DirectoryLabel name={dir.name} />
+            {dir.name}
           </FolderTrigger>
 
           <FolderContent>
@@ -767,7 +751,11 @@ export function ProjectFileManager({
               const target = fsMenu?.target
               if (!target) return
               closeFsMenu()
-              void handleOpenTerminal(target.fullPath)
+              const path =
+                target.kind === 'file'
+                  ? getParentPath(target.fullPath) ?? target.fullPath
+                  : target.fullPath
+              void handleOpenTerminal(path)
             }}
           >
             在终端打开

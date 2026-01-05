@@ -349,10 +349,12 @@ export function ProjectChat({
   project,
   detailsOpen,
   detailsPortalTarget,
+  onToolOutput,
 }: {
   project: ProjectDto
   detailsOpen: boolean
   detailsPortalTarget: HTMLDivElement | null
+  onToolOutput?: (chunk: string) => void
 }) {
   const apiBase = useMemo(() => getApiBase(), [])
   const sessionIdRef = useRef<string>(randomId('ctx'))
@@ -501,6 +503,15 @@ export function ProjectChat({
         const artifact = artifactUpdate?.artifact
         const artifactName = artifact?.name ?? ''
 
+        if (artifactName === 'tool-output') {
+          const parts = (artifact?.parts ?? []) as unknown[]
+          const chunk = readPartsText(parts)
+          if (chunk) {
+            onToolOutput?.(chunk)
+          }
+          continue
+        }
+
         if (artifactName === 'reasoning') {
           const parts = (artifact?.parts ?? []) as unknown[]
           const chunk = readPartsText(parts)
@@ -558,7 +569,7 @@ export function ProjectChat({
       setActiveTaskId(null)
       setCanceling(false)
     }
-  }, [apiBase, draft, project.workspacePath, sending, updateMessageText])
+  }, [apiBase, draft, onToolOutput, project.workspacePath, sending, updateMessageText])
 
   const cancel = useCallback(async () => {
     if (!activeTaskId || !sending || canceling) return

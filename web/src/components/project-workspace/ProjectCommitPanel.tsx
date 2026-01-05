@@ -2,11 +2,20 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '@/api/client'
 import type { GitLogResponse, GitStatusEntryDto, GitStatusResponse } from '@/api/types'
 import { cn } from '@/lib/utils'
+import { getVscodeFileIconUrl } from '@/lib/vscodeFileIcons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
 import { GitCommit, RefreshCw } from 'lucide-react'
 import { GitGraph } from './GitGraph'
+
+function getBaseName(fullPath: string): string {
+  const normalized = fullPath.replace(/[\\/]+$/, '')
+  const lastSeparator = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'))
+  if (lastSeparator < 0) return normalized
+  const base = normalized.slice(lastSeparator + 1)
+  return base || normalized
+}
 
 function getEntryLabel(entry: GitStatusEntryDto): string {
   const index = entry.indexStatus
@@ -182,6 +191,7 @@ export function ProjectCommitPanel({
                 const fileLabel = entry.originalPath
                   ? `${entry.originalPath} → ${entry.path}`
                   : entry.path
+                const iconUrl = getVscodeFileIconUrl(getBaseName(entry.path))
                 return (
                   <button
                     key={`${entry.indexStatus}${entry.worktreeStatus}:${entry.path}`}
@@ -202,6 +212,15 @@ export function ProjectCommitPanel({
                     >
                       {label}
                     </span>
+                    {iconUrl ? (
+                      <img
+                        src={iconUrl}
+                        alt=""
+                        aria-hidden="true"
+                        draggable={false}
+                        className="size-4.5 shrink-0"
+                      />
+                    ) : null}
                     <span className="min-w-0 flex-1 truncate text-xs">{fileLabel}</span>
                   </button>
                 )

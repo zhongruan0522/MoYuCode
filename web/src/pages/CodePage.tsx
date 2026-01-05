@@ -26,8 +26,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
-import { ProjectWorkspacePage } from '@/pages/ProjectWorkspacePage'
-import { ChevronDown, Folder, RefreshCw, Search, X } from 'lucide-react'
+import { ProjectWorkspacePage, type ProjectWorkspaceHandle } from '@/pages/ProjectWorkspacePage'
+import { ChevronDown, FileText, Folder, RefreshCw, Search, X } from 'lucide-react'
 
 const SELECTED_PROJECT_STORAGE_KEY = 'onecode:code:selected-project-id:v1'
 
@@ -37,8 +37,9 @@ function CodePageHeader({
   pickerButtonLabel,
   onTogglePicker,
   onOpenMenu,
-  onRefresh,
-  loading,
+  actionsAnchorRef,
+  actionsOpen,
+  onToggleActions,
   scanning,
   showScanButton,
   onScan,
@@ -48,8 +49,9 @@ function CodePageHeader({
   pickerButtonLabel: string
   onTogglePicker: () => void
   onOpenMenu: (e: ReactMouseEvent<HTMLButtonElement>) => void
-  onRefresh: () => void
-  loading: boolean
+  actionsAnchorRef: RefObject<HTMLButtonElement | null>
+  actionsOpen: boolean
+  onToggleActions: () => void
   scanning: boolean
   showScanButton: boolean
   onScan: () => void
@@ -83,24 +85,23 @@ function CodePageHeader({
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={loading || scanning}
-          onClick={onRefresh}
-          title="刷新项目列表"
-        >
-          {loading ? (
-            <span className="inline-flex items-center gap-2">
-              <Spinner /> 刷新中
-            </span>
-          ) : (
-            <>
-              <RefreshCw className="size-4" />
-              刷新
-            </>
-          )}
+        <Button asChild variant="outline" size="sm" className="group">
+          <button
+            ref={actionsAnchorRef}
+            type="button"
+            onClick={onToggleActions}
+            aria-haspopup="menu"
+            aria-expanded={actionsOpen}
+            title="更多功能"
+          >
+            更多功能
+            <ChevronDown
+              className={cn(
+                'size-4 shrink-0 text-muted-foreground transition-[transform,color] duration-200 ease-out group-hover:text-current',
+                actionsOpen && 'rotate-180',
+              )}
+            />
+          </button>
         </Button>
         {showScanButton ? (
           <Button
@@ -202,6 +203,16 @@ export function CodePage() {
   const [projectMenu, setProjectMenu] = useState<{ x: number; y: number } | null>(null)
   const closeProjectMenu = useCallback(() => setProjectMenu(null), [])
 
+  const workspaceRef = useRef<ProjectWorkspaceHandle | null>(null)
+
+  const [actionsMenuOpen, setActionsMenuOpen] = useState(false)
+  const actionsAnchorRef = useRef<HTMLButtonElement | null>(null)
+  const actionsMenuRef = useRef<HTMLDivElement | null>(null)
+  const [actionsMenuPos, setActionsMenuPos] = useState<
+    { top: number; left: number; width: number } | null
+  >(null)
+  const closeActionsMenu = useCallback(() => setActionsMenuOpen(false), [])
+
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameDraft, setRenameDraft] = useState('')
   const [renameBusy, setRenameBusy] = useState(false)
@@ -212,6 +223,17 @@ export function CodePage() {
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const closePicker = useCallback(() => setPickerOpen(false), [])
+
+  const toggleActionsMenu = useCallback(() => {
+    setActionsMenuOpen((open) => {
+      const next = !open
+      if (next) {
+        closePicker()
+        closeProjectMenu()
+      }
+      return next
+    })
+  }, [closePicker, closeProjectMenu])
 
   useEffect(() => {
     return () => {
@@ -246,6 +268,54 @@ export function CodePage() {
     }, 200)
   }, [pickerMenuMounted, pickerOpen])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    if (!actionsMenuOpen) {
+      setActionsMenuPos(null)
+      return
+    }
+
+    const anchor = actionsAnchorRef.current
+    if (!anchor) return
+
+    const update = () => {
+      const rect = anchor.getBoundingClientRect()
+      const width = 240
+      const maxLeft = Math.max(8, window.innerWidth - width - 8)
+      setActionsMenuPos({
+        top: rect.bottom + 6,
+        left: Math.min(rect.left, maxLeft),
+        width,
+      })
+    }
+
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Element | null
+      if (!target) return
+      const menu = actionsMenuRef.current
+      if (menu && menu.contains(target)) return
+      if (anchor.contains(target)) return
+      closeActionsMenu()
+    }
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeActionsMenu()
+    }
+
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [actionsMenuOpen, closeActionsMenu])
+
   const loadProjects = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -260,6 +330,26 @@ export function CodePage() {
       setInitialLoadDone(true)
     }
   }, [])
+
+  const refreshProjectsList = useCallback(() => {
+    closeActionsMenu()
+    void loadProjects()
+  }, [closeActionsMenu, loadProjects])
+
+  const openProjectSummary = useCallback(() => {
+    closeActionsMenu()
+    workspaceRef.current?.openProjectSummary()
+  }, [closeActionsMenu])
+
+  const openCodexConfigToml = useCallback(async () => {
+    closeActionsMenu()
+    try {
+      const status = await api.tools.status('codex')
+      workspaceRef.current?.openFile(status.configPath)
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }, [closeActionsMenu])
 
   const appendScanLog = useCallback((line: string) => {
     setScanLogs((prev) => {
@@ -529,10 +619,17 @@ export function CodePage() {
         pickerAnchorRef={pickerAnchorRef}
         pickerOpen={pickerOpen}
         pickerButtonLabel={pickerButtonLabel}
-        onTogglePicker={() => setPickerOpen((v) => !v)}
-        onOpenMenu={openProjectMenu}
-        onRefresh={() => void loadProjects()}
-        loading={loading}
+        onTogglePicker={() => {
+          closeActionsMenu()
+          setPickerOpen((v) => !v)
+        }}
+        onOpenMenu={(e) => {
+          closeActionsMenu()
+          openProjectMenu(e)
+        }}
+        actionsAnchorRef={actionsAnchorRef}
+        actionsOpen={actionsMenuOpen}
+        onToggleActions={toggleActionsMenu}
         scanning={scanning}
         showScanButton={!projects.length}
         onScan={() => startScan({ force: true })}
@@ -597,12 +694,60 @@ export function CodePage() {
         ) : (
           <div className="h-full min-h-0 animate-in fade-in-0 duration-200">
             <ProjectWorkspacePage
+              ref={workspaceRef}
               key={selectedProject.id}
               projectId={selectedProject.id}
             />
           </div>
         )}
       </div>
+
+      {actionsMenuOpen && actionsMenuPos && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              ref={actionsMenuRef}
+              className="fixed z-50 overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95 duration-200 ease-out"
+              style={{
+                top: actionsMenuPos.top,
+                left: actionsMenuPos.left,
+                width: actionsMenuPos.width,
+              }}
+              role="menu"
+            >
+              <div className="px-3 py-2 text-xs text-muted-foreground">更多功能</div>
+              <div className="h-px bg-border" />
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                disabled={loading || scanning}
+                onClick={refreshProjectsList}
+              >
+                {loading ? <Spinner /> : <RefreshCw className="size-4 text-muted-foreground" />}
+                {loading ? '刷新中' : '刷新项目列表'}
+              </button>
+              <div className="h-px bg-border" />
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                disabled={!selectedProject}
+                onClick={openProjectSummary}
+              >
+                <FileText className="size-4 text-muted-foreground" />
+                项目数据汇总
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                disabled={!selectedProject}
+                onClick={() => void openCodexConfigToml()}
+              >
+                <FileText className="size-4 text-muted-foreground" />
+                打开 config.toml
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
 
       {showProjectPickerMenu && pickerPosValue
         ? createPortal(

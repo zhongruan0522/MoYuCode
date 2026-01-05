@@ -52,6 +52,8 @@ function FolderItem(props: FolderItemProps) {
 type FolderTriggerProps = FileLabelPrimitiveProps & {
   gitStatus?: GitStatus;
   triggerClassName?: string;
+  closeIcon?: React.ReactNode;
+  openIcon?: React.ReactNode;
   onClick?: React.MouseEventHandler<HTMLButtonElement>;
   onDoubleClick?: React.MouseEventHandler<HTMLButtonElement>;
   onContextMenu?: React.MouseEventHandler<HTMLButtonElement>;
@@ -63,6 +65,8 @@ function FolderTrigger({
   className,
   gitStatus,
   triggerClassName,
+  closeIcon,
+  openIcon,
   onClick,
   onDoubleClick,
   onContextMenu,
@@ -89,8 +93,8 @@ function FolderTrigger({
               )}
             >
               <FolderIconPrimitive
-                closeIcon={<FolderIcon className="size-4.5" />}
-                openIcon={<FolderOpenIcon className="size-4.5" />}
+                closeIcon={closeIcon ?? <FolderIcon className="size-4.5" />}
+                openIcon={openIcon ?? <FolderOpenIcon className="size-4.5" />}
               />
               <FileLabelPrimitive
                 className={cn('text-sm', className)}
@@ -128,20 +132,28 @@ function FolderContent(props: FolderContentProps) {
 }
 
 type FileItemProps = FilePrimitiveProps & {
-  icon?: React.ElementType;
+  icon?: React.ReactNode;
   gitStatus?: GitStatus;
 };
 
 function FileItem({
-  icon: Icon = FileIcon,
+  icon,
   className,
   children,
   gitStatus,
   onContextMenu,
+  onClick,
+  onDoubleClick,
   ...props
 }: FileItemProps) {
+  const iconNode = icon ?? <FileIcon className="size-4.5" />;
+
   return (
-    <FileHighlightPrimitive onContextMenu={onContextMenu}>
+    <FileHighlightPrimitive
+      onContextMenu={onContextMenu}
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+    >
       <FilePrimitive
         className={cn(
           'flex items-center justify-between gap-2 p-2 pointer-events-none',
@@ -151,9 +163,7 @@ function FileItem({
         )}
       >
         <div className="flex items-center gap-2">
-          <FileIconPrimitive>
-            <Icon className="size-4.5" />
-          </FileIconPrimitive>
+          <FileIconPrimitive>{iconNode}</FileIconPrimitive>
           <FileLabelPrimitive className={cn('text-sm', className)} {...props}>
             {children}
           </FileLabelPrimitive>
