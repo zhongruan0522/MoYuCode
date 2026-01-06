@@ -10,3 +10,4 @@ web/dist/
 src/OneCode/wwwroot/
 /artifacts
 /src/OneCode/wwwroot
+node_modules

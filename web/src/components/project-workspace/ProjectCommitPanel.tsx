@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '@/api/client'
-import type { GitLogResponse, GitStatusEntryDto, GitStatusResponse } from '@/api/types'
+import type { GitBranchesResponse, GitLogResponse, GitStatusEntryDto, GitStatusResponse } from '@/api/types'
 import { cn } from '@/lib/utils'
 import { getVscodeFileIconUrl } from '@/lib/vscodeFileIcons'
+import { DiffViewer, type DiffViewMode } from '@/components/DiffViewer'
+import { Modal } from '@/components/Modal'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
-import { ChevronDown, GitCommit, Minus, MoreHorizontal, Plus, RefreshCw } from 'lucide-react'
-import { GitGraph } from './GitGraph'
+import { Check, ChevronDown, GitCommit, Minus, MoreHorizontal, Plus, RefreshCw } from 'lucide-react'
+import { GitGraph, type GitGraphCommit } from './GitGraph'
 
 function getBaseName(fullPath: string): string {
   const normalized = fullPath.replace(/[\\/]+$/, '')
@@ -403,6 +406,14 @@ export function ProjectCommitPanel({
 
   const [syncBusy, setSyncBusy] = useState<'pull' | 'push' | null>(null)
 
+  const [branches, setBranches] = useState<GitBranchesResponse | null>(null)
+  const [branchesLoading, setBranchesLoading] = useState(false)
+  const branchesLoadingRef = useRef(false)
+  const [branchError, setBranchError] = useState<string | null>(null)
+
+  const [checkoutBusy, setCheckoutBusy] = useState(false)
+  const checkoutBusyRef = useRef(false)
+
   const [aiBusy, setAiBusy] = useState(false)
   const aiAbortRef = useRef<AbortController | null>(null)
 
@@ -541,6 +552,185 @@ export function ProjectCommitPanel({
     staged: true,
     changes: true,
   }))
+
+  const branchAnchorRef = useRef<HTMLButtonElement | null>(null)
+  const branchMenuRef = useRef<HTMLDivElement | null>(null)
+  const [branchMenuOpen, setBranchMenuOpen] = useState(false)
+  const [branchMenuMounted, setBranchMenuMounted] = useState(false)
+  const [branchMenuPos, setBranchMenuPos] = useState<{ top: number; left: number } | null>(null)
+
+  const [createBranchOpen, setCreateBranchOpen] = useState(false)
+  const [createBranchName, setCreateBranchName] = useState('')
+  const [createBranchStartPoint, setCreateBranchStartPoint] = useState('')
+  const [createBranchCheckout, setCreateBranchCheckout] = useState(true)
+  const [createBranchBusy, setCreateBranchBusy] = useState(false)
+  const [createBranchError, setCreateBranchError] = useState<string | null>(null)
+
+  const loadBranches = useCallback(async () => {
+    const path = workspacePath.trim()
+    if (!path) return
+    if (branchesLoadingRef.current) return
+
+    branchesLoadingRef.current = true
+    setBranchesLoading(true)
+    setBranchError(null)
+    try {
+      const data = await api.git.branches(path)
+      setBranches(data)
+      setBranchError(null)
+    } catch (e) {
+      const msg = (e as Error).message
+      setBranchError(msg)
+      showNotice(msg)
+    } finally {
+      branchesLoadingRef.current = false
+      setBranchesLoading(false)
+    }
+  }, [showNotice, workspacePath])
+
+  const checkoutBranch = useCallback(
+    async (branch: string) => {
+      const path = workspacePath.trim()
+      const name = branch.trim()
+      if (!path || !name) return
+      if (checkoutBusyRef.current) return
+
+      checkoutBusyRef.current = true
+      setCheckoutBusy(true)
+      setCommitError(null)
+
+      try {
+        const output = await api.git.checkout({ path, branch: name })
+        showNotice(summarizeGitOutput(output, `已切换到 ${name}`))
+        void refresh({ silent: true })
+        void loadBranches()
+      } catch (e) {
+        showNotice((e as Error).message)
+      } finally {
+        checkoutBusyRef.current = false
+        setCheckoutBusy(false)
+      }
+    },
+    [loadBranches, refresh, showNotice, workspacePath],
+  )
+
+  const openCreateBranch = useCallback(() => {
+    setBranchMenuOpen(false)
+    setGitActionsOpen(false)
+    setCreateBranchName('')
+    setCreateBranchStartPoint('')
+    setCreateBranchCheckout(true)
+    setCreateBranchBusy(false)
+    setCreateBranchError(null)
+    setCreateBranchOpen(true)
+  }, [])
+
+  const submitCreateBranch = useCallback(async () => {
+    const path = workspacePath.trim()
+    const branch = createBranchName.trim()
+    if (!path) return
+
+    if (!branch) {
+      setCreateBranchError('分支名不能为空')
+      return
+    }
+
+    setCreateBranchBusy(true)
+    setCreateBranchError(null)
+    try {
+      const output = await api.git.createBranch({
+        path,
+        branch,
+        checkout: createBranchCheckout,
+        startPoint: createBranchStartPoint.trim() || null,
+      })
+      showNotice(
+        summarizeGitOutput(
+          output,
+          createBranchCheckout ? `已创建并切换到 ${branch}` : `已创建分支 ${branch}`,
+        ),
+      )
+      setCreateBranchOpen(false)
+      setCreateBranchName('')
+      setCreateBranchStartPoint('')
+      setCreateBranchCheckout(true)
+      void refresh({ silent: true })
+      void loadBranches()
+    } catch (e) {
+      setCreateBranchError((e as Error).message)
+    } finally {
+      setCreateBranchBusy(false)
+    }
+  }, [
+    createBranchCheckout,
+    createBranchName,
+    createBranchStartPoint,
+    loadBranches,
+    refresh,
+    showNotice,
+    workspacePath,
+  ])
+
+  useEffect(() => {
+    if (branchMenuOpen) {
+      setBranchMenuMounted(true)
+      return
+    }
+
+    if (!branchMenuMounted) return
+    const t = window.setTimeout(() => setBranchMenuMounted(false), 150)
+    return () => window.clearTimeout(t)
+  }, [branchMenuMounted, branchMenuOpen])
+
+  useEffect(() => {
+    if (!branchMenuOpen) return
+
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Element | null
+      if (!target) return
+
+      const menu = branchMenuRef.current
+      if (menu && menu.contains(target)) return
+
+      const anchor = branchAnchorRef.current
+      if (anchor && anchor.contains(target)) return
+
+      setBranchMenuOpen(false)
+    }
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setBranchMenuOpen(false)
+    }
+
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [branchMenuOpen])
+
+  useEffect(() => {
+    if (!branchMenuOpen) return
+
+    const anchor = branchAnchorRef.current
+    if (!anchor) return
+
+    const menuWidth = 280
+    const update = () => {
+      const rect = anchor.getBoundingClientRect()
+      const left = Math.min(rect.left, Math.max(0, window.innerWidth - menuWidth))
+      setBranchMenuPos({ top: rect.bottom + 4, left })
+    }
+
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+    }
+  }, [branchMenuOpen])
 
   const gitActionsAnchorRef = useRef<HTMLButtonElement | null>(null)
   const gitActionsMenuRef = useRef<HTMLDivElement | null>(null)
@@ -764,17 +954,107 @@ export function ProjectCommitPanel({
     }
   }, [aiBusy, gitState.changes, gitState.staged, projectId, showNotice, workspacePath])
 
+  const [commitDiffOpen, setCommitDiffOpen] = useState(false)
+  const [commitDiffViewMode, setCommitDiffViewMode] = useState<DiffViewMode>('split')
+  const [commitDiffCommit, setCommitDiffCommit] = useState<GitGraphCommit | null>(null)
+  const [commitDiffBusy, setCommitDiffBusy] = useState(false)
+  const [commitDiffError, setCommitDiffError] = useState<string | null>(null)
+  const [commitDiff, setCommitDiff] = useState('')
+  const [commitDiffFiles, setCommitDiffFiles] = useState<string[]>([])
+  const [commitDiffTruncated, setCommitDiffTruncated] = useState(false)
+  const commitDiffReqRef = useRef(0)
+
+  const closeCommitDiff = useCallback(() => {
+    commitDiffReqRef.current += 1
+    setCommitDiffOpen(false)
+  }, [])
+
+  const openCommitDiff = useCallback(
+    async (commit: GitGraphCommit) => {
+      const path = workspacePath.trim()
+      if (!path) return
+
+      const reqId = commitDiffReqRef.current + 1
+      commitDiffReqRef.current = reqId
+
+      setCommitDiffCommit(commit)
+      setCommitDiffOpen(true)
+      setCommitDiffBusy(true)
+      setCommitDiffError(null)
+      setCommitDiff('')
+      setCommitDiffFiles([])
+      setCommitDiffTruncated(false)
+
+      try {
+        const data = await api.git.commitDiff(path, commit.hash)
+        if (commitDiffReqRef.current !== reqId) return
+        setCommitDiff(data.diff ?? '')
+        setCommitDiffFiles(data.files ?? [])
+        setCommitDiffTruncated(Boolean(data.truncated))
+      } catch (e) {
+        if (commitDiffReqRef.current !== reqId) return
+        setCommitDiffError((e as Error).message)
+      } finally {
+        if (commitDiffReqRef.current === reqId) setCommitDiffBusy(false)
+      }
+    },
+    [workspacePath],
+  )
+
   const logLines = useMemo(() => log?.lines ?? [], [log?.lines])
   const syncLocked = syncBusy !== null
+  const gitOpLocked = syncLocked || checkoutBusy
+  const branchList = branches?.branches ?? []
+  const currentBranch = branches?.current ?? gitState.branch ?? null
 
   return (
     <div className="h-full min-h-0 overflow-hidden flex flex-col">
       <div className="p-2 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <div className="truncate text-[11px] text-muted-foreground" title={gitState.repoRoot}>
-              {gitState.branch ? ` ${gitState.branch}` : ' (detached)'}
-            </div>
+            <Button
+              ref={branchAnchorRef}
+              type="button"
+              variant="ghost"
+              size="sm"
+              title={gitState.repoRoot}
+              aria-haspopup="menu"
+              aria-expanded={branchMenuOpen}
+              aria-controls={branchMenuMounted ? 'git-branches-menu' : undefined}
+              className={cn(
+                'h-7 px-2 text-[11px] font-normal text-muted-foreground',
+                'hover:bg-accent/40 hover:text-foreground',
+                'min-w-0 max-w-full',
+              )}
+              disabled={loading || commitBusy || aiBusy || gitOpLocked || hasPending || createBranchBusy}
+              onClick={() => {
+                setGitActionsOpen(false)
+                setBranchMenuOpen((open) => {
+                  const next = !open
+                  if (next) {
+                    void loadBranches()
+                    const anchor = branchAnchorRef.current
+                    if (anchor) {
+                      const rect = anchor.getBoundingClientRect()
+                      const menuWidth = 280
+                      const left = Math.min(rect.left, Math.max(0, window.innerWidth - menuWidth))
+                      setBranchMenuPos({ top: rect.bottom + 4, left })
+                    }
+                  }
+                  return next
+                })
+              }}
+            >
+              <span className="min-w-0 truncate">
+                {gitState.branch ? ` ${gitState.branch}` : ' (detached)'}
+              </span>
+              <ChevronDown
+                className={cn(
+                  'ml-1 size-3 opacity-70 transition-transform',
+                  branchMenuOpen ? 'rotate-180' : '',
+                )}
+              />
+            </Button>
           </div>
           <div className="flex items-center gap-1">
             <Button
@@ -786,8 +1066,9 @@ export function ProjectCommitPanel({
               aria-haspopup="menu"
               aria-expanded={gitActionsOpen}
               aria-controls={gitActionsMounted ? 'git-actions-menu' : undefined}
-              disabled={loading || commitBusy || aiBusy || syncLocked || hasPending}
+              disabled={loading || commitBusy || aiBusy || gitOpLocked || hasPending || createBranchBusy}
               onClick={() => {
+                setBranchMenuOpen(false)
                 setGitActionsOpen((open) => {
                   const next = !open
                   if (next) {
@@ -810,7 +1091,7 @@ export function ProjectCommitPanel({
               size="icon-sm"
               title="刷新"
               onClick={() => void refresh()}
-              disabled={loading || commitBusy || syncLocked}
+              disabled={loading || commitBusy || gitOpLocked}
             >
               <RefreshCw className={cn('size-4', loading ? 'motion-safe:animate-spin' : '')} />
             </Button>
@@ -822,7 +1103,7 @@ export function ProjectCommitPanel({
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             placeholder="Commit message"
-            disabled={commitBusy || loading || aiBusy || syncLocked}
+            disabled={commitBusy || loading || aiBusy || gitOpLocked}
             className="min-h-20 pr-10 text-sm"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -838,7 +1119,7 @@ export function ProjectCommitPanel({
             className="absolute bottom-1.5 right-1.5"
             title={aiBusy ? 'Generating…' : 'AI 生成 Commit Message'}
             onClick={() => void handleGenerateCommit()}
-            disabled={loading || commitBusy || aiBusy || syncLocked}
+            disabled={loading || commitBusy || aiBusy || gitOpLocked}
           >
             {aiBusy ? <Spinner className="size-4" /> : <span aria-hidden="true">✨</span>}
           </Button>
@@ -852,7 +1133,7 @@ export function ProjectCommitPanel({
             commitBusy ||
             loading ||
             aiBusy ||
-            syncLocked ||
+            gitOpLocked ||
             hasPending ||
             !message.trim()
           }
@@ -878,6 +1159,91 @@ export function ProjectCommitPanel({
         {loadError ? <div className="text-xs text-destructive">{loadError}</div> : null}
       </div>
 
+      {typeof document !== 'undefined' && branchMenuMounted && branchMenuPos
+        ? createPortal(
+            <div
+              id="git-branches-menu"
+              ref={branchMenuRef}
+              role="menu"
+              data-state={branchMenuOpen ? 'open' : 'closed'}
+              className={cn(
+                'fixed z-50 w-[280px] max-h-[320px] overflow-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md',
+                'data-[state=open]:animate-in data-[state=closed]:animate-out',
+                'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+                'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
+                'duration-150',
+                !branchMenuOpen && 'pointer-events-none',
+              )}
+              style={{ top: branchMenuPos.top, left: branchMenuPos.left }}
+            >
+              <div className="px-2 py-1 text-[11px] text-muted-foreground">切换分支</div>
+              <div className="my-1 h-px bg-border/60" />
+              <button
+                type="button"
+                role="menuitem"
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm',
+                  'hover:bg-accent hover:text-accent-foreground',
+                  'disabled:pointer-events-none disabled:opacity-60',
+                )}
+                disabled={gitOpLocked || createBranchBusy}
+                onClick={() => openCreateBranch()}
+              >
+                <Plus className="size-4" />
+                <span className="min-w-0 flex-1 truncate">新建分支…</span>
+              </button>
+              <div className="my-1 h-px bg-border/60" />
+
+              {branchesLoading ? (
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                  <span className="inline-flex items-center gap-2">
+                    <Spinner className="size-3.5" /> 加载分支…
+                  </span>
+                </div>
+              ) : null}
+
+              {branchError ? (
+                <div className="px-2 py-1.5 text-xs text-destructive">{branchError}</div>
+              ) : null}
+
+              {!branchesLoading && !branchError ? (
+                branchList.length ? (
+                  branchList.map((name) => {
+                    const isCurrent = Boolean(currentBranch && name === currentBranch)
+                    return (
+                      <button
+                        key={name}
+                        type="button"
+                        role="menuitem"
+                        className={cn(
+                          'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm',
+                          'hover:bg-accent hover:text-accent-foreground',
+                          'disabled:pointer-events-none disabled:opacity-60',
+                        )}
+                        disabled={gitOpLocked || isCurrent}
+                        onClick={() => {
+                          setBranchMenuOpen(false)
+                          void checkoutBranch(name)
+                        }}
+                      >
+                        {isCurrent ? (
+                          <Check className="size-4 text-primary" />
+                        ) : (
+                          <span className="size-4" aria-hidden="true" />
+                        )}
+                        <span className="min-w-0 flex-1 truncate">{name}</span>
+                      </button>
+                    )
+                  })
+                ) : (
+                  <div className="px-2 py-1.5 text-xs text-muted-foreground">No branches</div>
+                )
+              ) : null}
+            </div>,
+            document.body,
+          )
+        : null}
+
       {typeof document !== 'undefined' && gitActionsMounted && gitActionsPos
         ? createPortal(
             <div
@@ -895,33 +1261,33 @@ export function ProjectCommitPanel({
               )}
               style={{ top: gitActionsPos.top, left: gitActionsPos.left }}
             >
-              <button
-                type="button"
-                role="menuitem"
-                className={cn(
-                  'flex w-full items-center rounded-sm px-2 py-1.5 text-sm',
-                  'hover:bg-accent hover:text-accent-foreground',
-                  syncLocked ? 'opacity-60 pointer-events-none' : '',
-                )}
-                onClick={() => {
-                  setGitActionsOpen(false)
-                  void runGitSync('pull')
-                }}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={cn(
+                    'flex w-full items-center rounded-sm px-2 py-1.5 text-sm',
+                    'hover:bg-accent hover:text-accent-foreground',
+                    gitOpLocked ? 'opacity-60 pointer-events-none' : '',
+                  )}
+                  onClick={() => {
+                    setGitActionsOpen(false)
+                    void runGitSync('pull')
+                  }}
               >
                 {syncBusy === 'pull' ? '拉取中…' : '拉取'}
               </button>
-              <button
-                type="button"
-                role="menuitem"
-                className={cn(
-                  'flex w-full items-center rounded-sm px-2 py-1.5 text-sm',
-                  'hover:bg-accent hover:text-accent-foreground',
-                  syncLocked ? 'opacity-60 pointer-events-none' : '',
-                )}
-                onClick={() => {
-                  setGitActionsOpen(false)
-                  void runGitSync('push')
-                }}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={cn(
+                    'flex w-full items-center rounded-sm px-2 py-1.5 text-sm',
+                    'hover:bg-accent hover:text-accent-foreground',
+                    gitOpLocked ? 'opacity-60 pointer-events-none' : '',
+                  )}
+                  onClick={() => {
+                    setGitActionsOpen(false)
+                    void runGitSync('push')
+                  }}
               >
                 {syncBusy === 'push' ? '推送中…' : '推送'}
               </button>
@@ -929,6 +1295,180 @@ export function ProjectCommitPanel({
             document.body,
           )
         : null}
+
+      <Modal
+        open={createBranchOpen}
+        title="新建分支"
+        onClose={() => {
+          if (createBranchBusy) return
+          setCreateBranchOpen(false)
+          setCreateBranchName('')
+          setCreateBranchStartPoint('')
+          setCreateBranchCheckout(true)
+          setCreateBranchError(null)
+        }}
+        className="max-w-lg"
+      >
+        <div className="space-y-3">
+          <div className="text-xs text-muted-foreground">基于当前 HEAD 创建分支，可选指定起点。</div>
+
+          <div className="space-y-1">
+            <div className="text-xs text-muted-foreground">分支名</div>
+            <Input
+              value={createBranchName}
+              onChange={(e) => setCreateBranchName(e.target.value)}
+              autoFocus
+              disabled={createBranchBusy}
+              placeholder="例如 feature/my-branch"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  void submitCreateBranch()
+                }
+              }}
+            />
+          </div>
+
+          <div className="space-y-1">
+            <div className="text-xs text-muted-foreground">起点（可选）</div>
+            <Input
+              value={createBranchStartPoint}
+              onChange={(e) => setCreateBranchStartPoint(e.target.value)}
+              disabled={createBranchBusy}
+              placeholder="例如 main / develop / <commit hash>（留空=HEAD）"
+            />
+          </div>
+
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="size-4 rounded border border-input bg-background"
+              checked={createBranchCheckout}
+              disabled={createBranchBusy}
+              onChange={(e) => setCreateBranchCheckout(e.target.checked)}
+            />
+            创建后切换
+          </label>
+
+          {createBranchError ? (
+            <div className="text-sm text-destructive">{createBranchError}</div>
+          ) : null}
+
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={createBranchBusy}
+              onClick={() => {
+                if (createBranchBusy) return
+                setCreateBranchOpen(false)
+                setCreateBranchName('')
+                setCreateBranchStartPoint('')
+                setCreateBranchCheckout(true)
+                setCreateBranchError(null)
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              disabled={createBranchBusy || !createBranchName.trim()}
+              onClick={() => void submitCreateBranch()}
+            >
+              {createBranchBusy ? (
+                <span className="inline-flex items-center gap-2">
+                  <Spinner className="size-4" /> 创建中…
+                </span>
+              ) : (
+                '创建'
+              )}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={commitDiffOpen}
+        title={commitDiffCommit ? `Commit Diff · ${commitDiffCommit.hash.slice(0, 7)}` : 'Commit Diff'}
+        onClose={() => {
+          closeCommitDiff()
+          setCommitDiffError(null)
+        }}
+        className="max-w-6xl"
+      >
+        {commitDiffCommit ? (
+          <div className="space-y-3">
+            <div className="min-w-0">
+              <div className="text-sm font-medium truncate">
+                {commitDiffCommit.subject || '（no message）'}
+              </div>
+              <div className="mt-0.5 text-[11px] text-muted-foreground break-all">
+                {commitDiffCommit.hash}
+              </div>
+              {commitDiffCommit.refs.length ? (
+                <div className="mt-1 text-[11px] text-muted-foreground">
+                  Refs：{commitDiffCommit.refs.join(', ')}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs text-muted-foreground">
+                变更文件：{commitDiffFiles.length ? commitDiffFiles.length : '—'}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant={commitDiffViewMode === 'split' ? 'secondary' : 'outline'}
+                  size="sm"
+                  onClick={() => setCommitDiffViewMode('split')}
+                >
+                  Split
+                </Button>
+                <Button
+                  type="button"
+                  variant={commitDiffViewMode === 'unified' ? 'secondary' : 'outline'}
+                  size="sm"
+                  onClick={() => setCommitDiffViewMode('unified')}
+                >
+                  Unified
+                </Button>
+              </div>
+            </div>
+
+            {commitDiffFiles.length ? (
+              <div className="rounded-md border bg-muted/20 px-3 py-2 text-xs">
+                <div className="text-[11px] text-muted-foreground">Files</div>
+                <div className="mt-1 max-h-24 overflow-auto">
+                  {commitDiffFiles.map((f) => (
+                    <div key={f} className="truncate" title={f}>
+                      {f}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {commitDiffTruncated ? (
+              <div className="text-xs text-muted-foreground">Diff 已截断（仅展示前一部分）。</div>
+            ) : null}
+
+            {commitDiffBusy ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Spinner /> 加载中…
+              </div>
+            ) : commitDiffError ? (
+              <div className="text-sm text-destructive">{commitDiffError}</div>
+            ) : (
+              <div className="h-[65vh] min-h-0 overflow-hidden rounded-md border">
+                <DiffViewer diff={commitDiff} viewMode={commitDiffViewMode} className="h-full" />
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-sm text-muted-foreground">未选择 Commit。</div>
+        )}
+      </Modal>
 
       <div className="min-h-0 flex-1 overflow-hidden flex flex-col border-t">
         <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
@@ -1011,7 +1551,7 @@ export function ProjectCommitPanel({
                                 disabled={
                                   commitBusy ||
                                   aiBusy ||
-                                  syncLocked ||
+                                  gitOpLocked ||
                                   pending.has(`unstage:${file.path}`) ||
                                   pending.has(`stage:${file.path}`)
                                 }
@@ -1101,7 +1641,7 @@ export function ProjectCommitPanel({
                                 disabled={
                                   commitBusy ||
                                   aiBusy ||
-                                  syncLocked ||
+                                  gitOpLocked ||
                                   pending.has(`stage:${file.path}`) ||
                                   pending.has(`unstage:${file.path}`)
                                 }
@@ -1124,7 +1664,7 @@ export function ProjectCommitPanel({
         </div>
 
         <div className="shrink-0 border-t px-2 py-2 max-h-[45%] overflow-auto">
-          <GitGraph lines={logLines} />
+          <GitGraph lines={logLines} onSelectCommit={(commit) => void openCommitDiff(commit)} />
         </div>
       </div>
     </div>

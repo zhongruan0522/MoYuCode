@@ -78,6 +78,63 @@ public static class ApiEndpoints
                 Entries: entries);
         });
 
+        git.MapGet("/branches", async (string path, CancellationToken cancellationToken) =>
+        {
+            var repoRoot = await ResolveGitRootAsync(path, cancellationToken);
+            var branch = await TryGetGitBranchAsync(repoRoot, cancellationToken);
+
+            var output = await RunGitAsync(
+                repoRoot,
+                ["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+                cancellationToken);
+
+            var branches = string.IsNullOrWhiteSpace(output)
+                ? new List<string>()
+                : output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+            return new GitBranchesResponse(
+                RepoRoot: repoRoot,
+                Current: branch,
+                Branches: branches);
+        });
+
+        git.MapPost("/branches", async ([FromBody] GitCreateBranchRequest request, CancellationToken cancellationToken) =>
+        {
+            if (string.IsNullOrWhiteSpace(request.Path))
+            {
+                throw new ApiHttpException(StatusCodes.Status400BadRequest, "Path is required.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.Branch))
+            {
+                throw new ApiHttpException(StatusCodes.Status400BadRequest, "Branch is required.");
+            }
+
+            var repoRoot = await ResolveGitRootAsync(request.Path, cancellationToken);
+            var branch = request.Branch.Trim();
+            var startPoint = string.IsNullOrWhiteSpace(request.StartPoint) ? null : request.StartPoint.Trim();
+
+            IReadOnlyList<string> args;
+            if (request.Checkout)
+            {
+                args = startPoint is null
+                    ? ["checkout", "-b", branch]
+                    : ["checkout", "-b", branch, startPoint];
+            }
+            else
+            {
+                args = startPoint is null
+                    ? ["branch", branch]
+                    : ["branch", branch, startPoint];
+            }
+
+            return await RunGitAsync(repoRoot, args, cancellationToken);
+        });
+
         git.MapGet("/log", async (
             string path,
             CancellationToken cancellationToken,
@@ -101,6 +158,52 @@ public static class ApiEndpoints
                 RepoRoot: repoRoot,
                 Branch: branch,
                 Lines: lines);
+        });
+
+        git.MapGet("/commit-diff", async (
+            string path,
+            string hash,
+            CancellationToken cancellationToken) =>
+        {
+            if (string.IsNullOrWhiteSpace(hash))
+            {
+                throw new ApiHttpException(StatusCodes.Status400BadRequest, "Missing query parameter: hash");
+            }
+
+            var repoRoot = await ResolveGitRootAsync(path, cancellationToken);
+            var commitish = hash.Trim();
+
+            var filesOutput = await RunGitAsync(
+                repoRoot,
+                ["show", "--name-only", "--pretty=format:", commitish],
+                cancellationToken);
+
+            var files = string.IsNullOrWhiteSpace(filesOutput)
+                ? new List<string>()
+                : filesOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+            var diff = await RunGitAsync(
+                repoRoot,
+                ["show", "--no-color", "--pretty=format:", "--patch", commitish],
+                cancellationToken);
+
+            diff = diff.TrimEnd();
+            var truncated = false;
+            if (diff.Length > 400_000)
+            {
+                truncated = true;
+                diff = diff[..400_000] + "\n…(truncated)…";
+            }
+
+            return new GitCommitDiffResponse(
+                Hash: commitish,
+                Diff: diff,
+                Truncated: truncated,
+                Files: files);
         });
 
         git.MapGet("/diff", async (string path, string file, CancellationToken cancellationToken, bool staged = false) =>
@@ -209,6 +312,23 @@ public static class ApiEndpoints
             var subject = (await RunGitAsync(repoRoot, ["log", "-1", "--pretty=%s"], cancellationToken)).Trim();
 
             return new GitCommitResponse(Hash: hash, Subject: subject);
+        });
+
+        git.MapPost("/checkout", async ([FromBody] GitCheckoutRequest request, CancellationToken cancellationToken) =>
+        {
+            if (string.IsNullOrWhiteSpace(request.Path))
+            {
+                throw new ApiHttpException(StatusCodes.Status400BadRequest, "Path is required.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.Branch))
+            {
+                throw new ApiHttpException(StatusCodes.Status400BadRequest, "Branch is required.");
+            }
+
+            var repoRoot = await ResolveGitRootAsync(request.Path, cancellationToken);
+            var branch = request.Branch.Trim();
+            return await RunGitAsync(repoRoot, ["checkout", branch], cancellationToken);
         });
 
         git.MapPost("/pull", async ([FromBody] GitRepoRequest request, CancellationToken cancellationToken) =>

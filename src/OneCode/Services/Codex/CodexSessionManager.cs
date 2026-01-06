@@ -17,15 +17,17 @@ public sealed class CodexSessionManager
     public async Task<CodexThreadRef> GetOrCreateThreadAsync(
         string sessionId,
         string cwd,
+        string? modelProvider,
         CancellationToken cancellationToken)
     {
+        var providerKey = string.IsNullOrWhiteSpace(modelProvider) ? string.Empty : modelProvider.Trim();
         var state = _sessions.GetOrAdd(sessionId, _ => new SessionState());
         await state.Lock.WaitAsync(cancellationToken);
         try
         {
-            if (state.Thread is not null)
+            if (state.Threads.TryGetValue(providerKey, out var existing))
             {
-                return state.Thread;
+                return existing;
             }
 
             var result = await _client.CallAsync(
@@ -35,6 +37,7 @@ public sealed class CodexSessionManager
                     cwd,
                     approvalPolicy = "never",
                     sandbox = "danger-full-access",
+                    modelProvider = string.IsNullOrWhiteSpace(providerKey) ? null : providerKey,
                 },
                 cancellationToken);
 
@@ -48,7 +51,7 @@ public sealed class CodexSessionManager
                 Cwd: cwd,
                 SessionPath: path);
 
-            state.Thread = thread;
+            state.Threads[providerKey] = thread;
             return thread;
         }
         finally
@@ -76,7 +79,7 @@ public sealed class CodexSessionManager
     {
         public SemaphoreSlim Lock { get; } = new(1, 1);
 
-        public CodexThreadRef? Thread { get; set; }
+        public Dictionary<string, CodexThreadRef> Threads { get; } = new(StringComparer.Ordinal);
     }
 }
 

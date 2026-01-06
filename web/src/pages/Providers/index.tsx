@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, formatUtc } from '@/api/client'
-import type { ProviderDto, ProviderUpsertRequest } from '@/api/types'
+import type { ProviderDto, ProviderRequestType, ProviderUpsertRequest } from '@/api/types'
 import { cn } from '@/lib/utils'
 import { Modal } from '@/components/Modal'
 import { Badge } from '@/components/ui/badge'
@@ -22,6 +22,13 @@ import {
 } from '@/components/ui/accordion'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Copy,
   Eye,
@@ -107,6 +114,19 @@ function safeHostname(url: string): string {
     return new URL(url).hostname
   } catch {
     return url
+  }
+}
+
+function requestTypeLabel(value: ProviderRequestType): string {
+  switch (value) {
+    case 'OpenAI':
+      return 'OpenAI Chat'
+    case 'OpenAIResponses':
+      return 'OpenAI Responses'
+    case 'AzureOpenAI':
+      return 'Azure OpenAI'
+    case 'Anthropic':
+      return 'Anthropic'
   }
 }
 
@@ -518,15 +538,25 @@ export default function Providers() {
   })
   const selectedRef = useMemo(() => parseSelectedKey(selectedKey), [selectedKey])
 
+  const [presetRequestType, setPresetRequestType] =
+    useState<ProviderRequestType>('OpenAI')
+
   const [customName, setCustomName] = useState('')
   const [customBaseUrl, setCustomBaseUrl] = useState('')
   const [customLogo, setCustomLogo] = useState('')
+  const [customRequestType, setCustomRequestType] =
+    useState<ProviderRequestType>('OpenAI')
+  const [customAzureApiVersion, setCustomAzureApiVersion] = useState('')
 
   const [createCustomOpen, setCreateCustomOpen] = useState(false)
   const [createCustomError, setCreateCustomError] = useState<string | null>(null)
   const [createCustomName, setCreateCustomName] = useState('')
   const [createCustomBaseUrl, setCreateCustomBaseUrl] = useState('')
   const [createCustomLogo, setCreateCustomLogo] = useState('')
+  const [createCustomRequestType, setCreateCustomRequestType] =
+    useState<ProviderRequestType>('OpenAI')
+  const [createCustomAzureApiVersion, setCreateCustomAzureApiVersion] =
+    useState('')
   const [createCustomApiKey, setCreateCustomApiKey] = useState('')
   const [createCustomShowApiKey, setCreateCustomShowApiKey] = useState(false)
 
@@ -568,7 +598,7 @@ export default function Providers() {
   }, [selectedRef])
 
   const providerByPresetId = useMemo(() => {
-    const map: Record<string, ProviderDto> = {}
+    const map: Partial<Record<string, ProviderDto>> = {}
     for (const preset of providerPresets) {
       const normalizedPresetUrl = trimTrailingSlash(preset.baseUrl)
       const hit =
@@ -606,12 +636,31 @@ export default function Providers() {
       setCustomName(hit?.name ?? '')
       setCustomBaseUrl(hit?.address ?? '')
       setCustomLogo(hit?.logo ?? '')
+      setCustomRequestType(hit?.requestType ?? 'OpenAI')
+      setCustomAzureApiVersion(hit?.azureApiVersion ?? '')
     } else {
       setCustomName('')
       setCustomBaseUrl('')
       setCustomLogo('')
+      setCustomRequestType('OpenAI')
+      setCustomAzureApiVersion('')
     }
   }, [providers, selectedRef])
+
+  useEffect(() => {
+    if (selectedRef?.kind !== 'preset') {
+      setPresetRequestType('OpenAI')
+      return
+    }
+
+    const next = selectedProvider?.requestType ?? 'OpenAI'
+    if (next === 'OpenAI' || next === 'OpenAIResponses') {
+      setPresetRequestType(next)
+      return
+    }
+
+    setPresetRequestType('OpenAI')
+  }, [selectedProvider?.requestType, selectedRef])
 
   const filteredProviders = useMemo(() => {
     const q = providerQuery.trim().toLowerCase()
@@ -626,6 +675,7 @@ export default function Providers() {
         configured: providerByPresetId[p.id]?.hasApiKey ?? false,
         sortIndex: index,
         preset: p,
+        provider: providerByPresetId[p.id],
       }))
 
     const customItems: ProviderListItem[] = customProviders.map((p) => ({
@@ -692,26 +742,42 @@ export default function Providers() {
       if (!selectedRef) return null
       if (selectedRef.kind === 'preset') {
         if (!selectedPreset) return null
+        const requestType = presetRequestType
+        const azureApiVersion = null
         return {
           name: selectedPreset.name,
           address: selectedPreset.baseUrl,
           logo: selectedPreset.icon,
           apiKey: key,
-          requestType: 'OpenAI',
-          azureApiVersion: null,
+          requestType,
+          azureApiVersion,
         }
       }
+
+      const azureApiVersion =
+        customRequestType === 'AzureOpenAI'
+          ? (customAzureApiVersion.trim() ? customAzureApiVersion.trim() : null)
+          : null
 
       return {
         name: customName.trim(),
         address: trimTrailingSlash(customBaseUrl.trim()),
         logo: customLogo.trim() ? customLogo.trim() : null,
         apiKey: key,
-        requestType: 'OpenAI',
-        azureApiVersion: null,
+        requestType: customRequestType,
+        azureApiVersion,
       }
     },
-    [customBaseUrl, customLogo, customName, selectedPreset, selectedRef],
+    [
+      customAzureApiVersion,
+      customBaseUrl,
+      customLogo,
+      customName,
+      customRequestType,
+      presetRequestType,
+      selectedPreset,
+      selectedRef,
+    ],
   )
 
   const save = useCallback(async () => {
@@ -793,6 +859,8 @@ export default function Providers() {
     setCreateCustomName('')
     setCreateCustomBaseUrl('')
     setCreateCustomLogo('')
+    setCreateCustomRequestType('OpenAI')
+    setCreateCustomAzureApiVersion('')
     setCreateCustomApiKey('')
     setCreateCustomShowApiKey(false)
     setCreateCustomOpen(true)
@@ -816,19 +884,28 @@ export default function Providers() {
     setBusy('save')
     setCreateCustomError(null)
     try {
+      const azureApiVersion =
+        createCustomRequestType === 'AzureOpenAI'
+          ? (createCustomAzureApiVersion.trim()
+              ? createCustomAzureApiVersion.trim()
+              : null)
+          : null
+
       const created = await api.providers.create({
         name: createCustomName.trim(),
         address: normalizedBaseUrl,
         logo: createCustomLogo.trim() ? createCustomLogo.trim() : null,
         apiKey: createCustomApiKey,
-        requestType: 'OpenAI',
-        azureApiVersion: null,
+        requestType: createCustomRequestType,
+        azureApiVersion,
       })
 
       setCreateCustomOpen(false)
       setCreateCustomName('')
       setCreateCustomBaseUrl('')
       setCreateCustomLogo('')
+      setCreateCustomRequestType('OpenAI')
+      setCreateCustomAzureApiVersion('')
       setCreateCustomApiKey('')
       setCreateCustomShowApiKey(false)
       setProviders((prev) => [...prev, created])
@@ -840,9 +917,11 @@ export default function Providers() {
     }
   }, [
     createCustomApiKey,
+    createCustomAzureApiVersion,
     createCustomBaseUrl,
     createCustomLogo,
     createCustomName,
+    createCustomRequestType,
   ])
 
   const copyToClipboard = useCallback(async (key: string, text: string) => {
@@ -909,15 +988,44 @@ export default function Providers() {
       ? (selectedPreset?.baseUrl ?? '')
       : customBaseUrl || selectedProvider?.address || ''
 
+  const selectedRequestType: ProviderRequestType =
+    selectedRef.kind === 'custom'
+      ? customRequestType
+      : presetRequestType
+
   const selectedDescription =
     selectedRef.kind === 'preset'
       ? (selectedPreset?.description ??
-          `Base URL 固定为官方地址（${selectedPreset?.baseUrl ?? ''}），协议固定为 OpenAI Chat。`)
-      : '自定义提供商：Base URL 可编辑，协议固定为 OpenAI Chat。'
+          `Base URL 固定为官方地址（${selectedPreset?.baseUrl ?? ''}），协议：${requestTypeLabel(selectedRequestType)}。`)
+      : `自定义提供商：Base URL 可编辑，协议：${requestTypeLabel(selectedRequestType)}。`
 
-  const chatEndpoint = selectedDisplayBaseUrl
-    ? joinUrl(selectedDisplayBaseUrl, '/chat/completions')
-    : ''
+  const azureApiVersionHint =
+    selectedRequestType === 'AzureOpenAI'
+      ? (selectedRef.kind === 'custom'
+          ? customAzureApiVersion.trim() ||
+            selectedProvider?.azureApiVersion ||
+            ''
+          : selectedProvider?.azureApiVersion || '') || '2025-04-01-preview'
+      : ''
+
+  const endpointHintLabel =
+    selectedRequestType === 'OpenAI'
+      ? 'Chat Completions'
+      : selectedRequestType === 'OpenAIResponses'
+        ? 'Responses'
+        : selectedRequestType === 'Anthropic'
+          ? 'Messages'
+          : 'Deployments'
+
+  const endpointHint = !selectedDisplayBaseUrl
+    ? ''
+    : selectedRequestType === 'OpenAI'
+      ? joinUrl(selectedDisplayBaseUrl, '/chat/completions')
+      : selectedRequestType === 'OpenAIResponses'
+        ? joinUrl(selectedDisplayBaseUrl, '/responses')
+        : selectedRequestType === 'Anthropic'
+          ? joinUrl(selectedDisplayBaseUrl, '/v1/messages')
+          : `${trimTrailingSlash(selectedDisplayBaseUrl)}/openai/deployments?api-version=${encodeURIComponent(azureApiVersionHint)}`
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 md:flex-row md:overflow-hidden">
@@ -937,6 +1045,8 @@ export default function Providers() {
             <div className="space-y-1">
               {filteredProviders.map((item) => {
                 const selected = item.key === selectedKey
+                const itemRequestType: ProviderRequestType =
+                  item.provider?.requestType ?? 'OpenAI'
                 return (
                   <button
                     key={item.key}
@@ -962,6 +1072,13 @@ export default function Providers() {
                             自定义
                           </Badge>
                         ) : null}
+                        <Badge
+                          variant="secondary"
+                          className="shrink-0 text-[10px]"
+                          title={`类型：${itemRequestType}`}
+                        >
+                          {requestTypeLabel(itemRequestType)}
+                        </Badge>
                       </span>
                       <span className="block truncate text-xs text-muted-foreground">
                         {safeHostname(item.baseUrl)}
@@ -1004,6 +1121,12 @@ export default function Providers() {
               {selectedRef.kind === 'custom' ? (
                 <Badge variant="outline">自定义</Badge>
               ) : null}
+              <Badge
+                variant="secondary"
+                title={`requestType: ${selectedRequestType}`}
+              >
+                {requestTypeLabel(selectedRequestType)}
+              </Badge>
               {selectedRef.kind === 'preset' && selectedPreset?.homepage ? (
                 <a
                   href={selectedPreset.homepage}
@@ -1109,6 +1232,77 @@ export default function Providers() {
                     提示：放在 web/public/icon/ 的 svg 可直接写 /icon/xxx.svg
                   </div>
                 </div>
+                <div className="space-y-1">
+                  <div className="text-sm font-medium">提供商类型</div>
+                  <Select
+                    value={customRequestType}
+                    onValueChange={(value) =>
+                      setCustomRequestType(value as ProviderRequestType)
+                    }
+                    disabled={loading}
+                  >
+                    <SelectTrigger className="h-9 w-full bg-background px-3 text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="OpenAI">
+                        {requestTypeLabel('OpenAI')}
+                      </SelectItem>
+                      <SelectItem value="OpenAIResponses">
+                        {requestTypeLabel('OpenAIResponses')}
+                      </SelectItem>
+                      <SelectItem value="AzureOpenAI">
+                        {requestTypeLabel('AzureOpenAI')}
+                      </SelectItem>
+                      <SelectItem value="Anthropic">
+                        {requestTypeLabel('Anthropic')}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {customRequestType === 'AzureOpenAI' ? (
+                  <div className="space-y-1">
+                    <div className="text-sm font-medium">
+                      Azure API Version（可选）
+                    </div>
+                    <Input
+                      value={customAzureApiVersion}
+                      onChange={(e) => setCustomAzureApiVersion(e.target.value)}
+                      disabled={loading}
+                      placeholder="例如：2025-04-01-preview（留空默认）"
+                    />
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {selectedRef.kind === 'preset' ? (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div className="space-y-1">
+                  <div className="text-sm font-medium">提供商类型</div>
+                  <Select
+                    value={presetRequestType}
+                    onValueChange={(value) =>
+                      setPresetRequestType(value as ProviderRequestType)
+                    }
+                    disabled={loading}
+                  >
+                    <SelectTrigger className="h-9 w-full bg-background px-3 text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="OpenAI">
+                        {requestTypeLabel('OpenAI')}
+                      </SelectItem>
+                      <SelectItem value="OpenAIResponses">
+                        {requestTypeLabel('OpenAIResponses')}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <div className="text-xs text-muted-foreground">
+                    预设提供商通常为 OpenAI 兼容协议，可选 Chat 或 Responses。
+                  </div>
+                </div>
               </div>
             ) : null}
 
@@ -1182,7 +1376,7 @@ export default function Providers() {
                 </div>
               </div>
               <div className="text-xs text-muted-foreground">
-                ApiKey 仅用于调用对应提供商的 OpenAI Chat 接口，OneCode 不会在前端展示完整密钥。
+                ApiKey 仅用于调用对应提供商接口，OneCode 不会在前端展示完整密钥。
               </div>
             </div>
 
@@ -1214,9 +1408,11 @@ export default function Providers() {
               ) : (
                 <Input readOnly value={selectedDisplayBaseUrl} />
               )}
-              <div className="text-xs text-muted-foreground">
-                Chat Completions：{chatEndpoint}
-              </div>
+              {endpointHint ? (
+                <div className="text-xs text-muted-foreground">
+                  {endpointHintLabel}：{endpointHint}
+                </div>
+              ) : null}
             </div>
 
             <div className="flex min-h-0 flex-1 flex-col gap-2">
@@ -1326,7 +1522,7 @@ export default function Providers() {
         >
           <div className="space-y-3">
             <div className="text-xs text-muted-foreground">
-              新增一个自定义 OpenAI 兼容提供商（Base URL + ApiKey）。保存后可在左侧列表中选择并管理模型缓存。
+              新增一个自定义提供商（支持 OpenAI / OpenAI Responses / Azure OpenAI / Anthropic）。保存后可在左侧列表中选择并管理模型缓存。
             </div>
 
             {createCustomError ? (
@@ -1370,6 +1566,52 @@ export default function Providers() {
                   />
                 </div>
               </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground">提供商类型</div>
+                <Select
+                  value={createCustomRequestType}
+                  onValueChange={(value) =>
+                    setCreateCustomRequestType(value as ProviderRequestType)
+                  }
+                  disabled={loading}
+                >
+                  <SelectTrigger className="h-9 w-full bg-background px-3 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="OpenAI">
+                      {requestTypeLabel('OpenAI')}
+                    </SelectItem>
+                    <SelectItem value="OpenAIResponses">
+                      {requestTypeLabel('OpenAIResponses')}
+                    </SelectItem>
+                    <SelectItem value="AzureOpenAI">
+                      {requestTypeLabel('AzureOpenAI')}
+                    </SelectItem>
+                    <SelectItem value="Anthropic">
+                      {requestTypeLabel('Anthropic')}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {createCustomRequestType === 'AzureOpenAI' ? (
+                <div className="space-y-1">
+                  <div className="text-xs text-muted-foreground">
+                    Azure API Version（可选）
+                  </div>
+                  <Input
+                    value={createCustomAzureApiVersion}
+                    onChange={(e) =>
+                      setCreateCustomAzureApiVersion(e.target.value)
+                    }
+                    disabled={loading}
+                    placeholder="例如：2025-04-01-preview（留空默认）"
+                  />
+                </div>
+              ) : null}
             </div>
 
             <div className="space-y-1">

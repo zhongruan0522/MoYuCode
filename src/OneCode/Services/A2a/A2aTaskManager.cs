@@ -169,6 +169,11 @@ public sealed class A2aTaskManager
                     final: false),
             });
 
+        AppendSystemLog(
+            state,
+            request,
+            request.ToolType == ToolType.ClaudeCode ? "工具类型：Claude Code" : "工具类型：Codex");
+
         state.RunningTask = Task.Run(
             () => request.ToolType == ToolType.ClaudeCode
                 ? RunClaudeTurnAsync(state, request)
@@ -277,9 +282,16 @@ public sealed class A2aTaskManager
                 });
 
             AppendSystemLog(state, request, "准备启动 Codex（app-server）…");
+            var modelProvider = GetCodexModelProvider(request);
+            if (!string.IsNullOrWhiteSpace(modelProvider))
+            {
+                await UpsertCodexModelProviderAsync(modelProvider, request, CancellationToken.None);
+            }
+
             var thread = await _codexSessionManager.GetOrCreateThreadAsync(
                 request.ContextId,
                 request.Cwd,
+                modelProvider,
                 CancellationToken.None);
 
             lock (state.Sync)
@@ -351,6 +363,138 @@ public sealed class A2aTaskManager
                 // ignore
             }
         }
+    }
+
+    private static string? GetCodexModelProvider(A2aTaskStartRequest request)
+    {
+        if (!request.ProviderId.HasValue)
+        {
+            return null;
+        }
+
+        return $"onecode-{request.ProviderId.Value:N}";
+    }
+
+    private async Task UpsertCodexModelProviderAsync(
+        string modelProvider,
+        A2aTaskStartRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request.ToolType != ToolType.Codex)
+        {
+            return;
+        }
+
+        if (!request.ProviderId.HasValue)
+        {
+            return;
+        }
+
+        if (request.ProviderRequestType is null)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.ProviderAddress))
+        {
+            return;
+        }
+
+        var envKeyName = $"ONECODE_API_KEY_{request.ProviderId.Value:N}";
+
+        var edits = new List<object>
+        {
+            new
+            {
+                keyPath = $"model_providers.{modelProvider}.name",
+                mergeStrategy = "replace",
+                value = "OneCode",
+            },
+            new
+            {
+                keyPath = $"model_providers.{modelProvider}.base_url",
+                mergeStrategy = "replace",
+                value = request.ProviderAddress.Trim(),
+            },
+        };
+
+        switch (request.ProviderRequestType.Value)
+        {
+            case ProviderRequestType.OpenAI:
+                edits.Add(new
+                {
+                    keyPath = $"model_providers.{modelProvider}.wire_api",
+                    mergeStrategy = "replace",
+                    value = "chat",
+                });
+                edits.Add(new
+                {
+                    keyPath = $"model_providers.{modelProvider}.env_key",
+                    mergeStrategy = "replace",
+                    value = envKeyName,
+                });
+                break;
+
+            case ProviderRequestType.OpenAIResponses:
+                edits.Add(new
+                {
+                    keyPath = $"model_providers.{modelProvider}.wire_api",
+                    mergeStrategy = "replace",
+                    value = "responses",
+                });
+                edits.Add(new
+                {
+                    keyPath = $"model_providers.{modelProvider}.env_key",
+                    mergeStrategy = "replace",
+                    value = envKeyName,
+                });
+                break;
+
+            case ProviderRequestType.AzureOpenAI:
+            {
+                var apiVersion = string.IsNullOrWhiteSpace(request.ProviderAzureApiVersion)
+                    ? "2025-04-01-preview"
+                    : request.ProviderAzureApiVersion.Trim();
+
+                edits.Add(new
+                {
+                    keyPath = $"model_providers.{modelProvider}.wire_api",
+                    mergeStrategy = "replace",
+                    value = "responses",
+                });
+                edits.Add(new
+                {
+                    keyPath = $"model_providers.{modelProvider}.env_http_headers",
+                    mergeStrategy = "replace",
+                    value = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["api-key"] = envKeyName,
+                    },
+                });
+                edits.Add(new
+                {
+                    keyPath = $"model_providers.{modelProvider}.query_params",
+                    mergeStrategy = "replace",
+                    value = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["api-version"] = apiVersion,
+                    },
+                });
+                break;
+            }
+
+            case ProviderRequestType.Anthropic:
+            default:
+                return;
+        }
+
+        await _codexClient.CallAsync(
+            method: "config/batchWrite",
+            @params: new
+            {
+                edits,
+            },
+            cancellationToken);
     }
 
     private async Task RunClaudeTurnAsync(A2aTaskState state, A2aTaskStartRequest request)
@@ -466,12 +610,30 @@ public sealed class A2aTaskManager
             state.ActiveProcess = process;
         }
 
+        string? lastStderrLine = null;
+        string? sessionNotFoundLineFromStderr = null;
+
+        void OnStderrLine(string line)
+        {
+            Interlocked.Exchange(ref lastStderrLine, line);
+
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0)
+            {
+                return;
+            }
+
+            if (LooksLikeClaudeSessionNotFound(trimmed))
+            {
+                Interlocked.CompareExchange(ref sessionNotFoundLineFromStderr, trimmed, comparand: null);
+            }
+        }
+
         using var stderrCts = new CancellationTokenSource();
         var stderrTask = Task.Run(
-            () => PumpClaudeStderrAsync(state, request, process.StandardError, stderrCts.Token),
+            () => PumpClaudeStderrAsync(state, request, process.StandardError, OnStderrLine, stderrCts.Token),
             CancellationToken.None);
 
-        var sawAnyJson = false;
         var sawAnyTextDelta = false;
 
         try
@@ -506,15 +668,19 @@ public sealed class A2aTaskManager
                     continue;
                 }
 
-                if (!sawAnyJson && LooksLikeClaudeSessionNotFound(trimmed))
+                if (LooksLikeClaudeSessionNotFound(trimmed))
                 {
-                    return new ClaudeRunResult(SessionNotFound: true, Cancelled: false, FailureMessage: trimmed);
+                    if (resume)
+                    {
+                        return new ClaudeRunResult(SessionNotFound: true, Cancelled: false, FailureMessage: trimmed);
+                    }
+
+                    return new ClaudeRunResult(SessionNotFound: false, Cancelled: false, FailureMessage: trimmed);
                 }
 
                 try
                 {
                     using var doc = JsonDocument.Parse(trimmed);
-                    sawAnyJson = true;
                     HandleClaudeStreamLine(state, request, doc.RootElement, ref sawAnyTextDelta);
                     if (IsFinal(state))
                     {
@@ -542,12 +708,33 @@ public sealed class A2aTaskManager
                 return new ClaudeRunResult(SessionNotFound: false, Cancelled: true, FailureMessage: null);
             }
 
-            if (process.ExitCode != 0 && !IsFinal(state))
+            var stderrSessionNotFound = Volatile.Read(ref sessionNotFoundLineFromStderr);
+            if (!string.IsNullOrWhiteSpace(stderrSessionNotFound) && !IsFinal(state))
             {
+                if (resume)
+                {
+                    return new ClaudeRunResult(
+                        SessionNotFound: true,
+                        Cancelled: false,
+                        FailureMessage: stderrSessionNotFound);
+                }
+
                 return new ClaudeRunResult(
                     SessionNotFound: false,
                     Cancelled: false,
-                    FailureMessage: $"claude exited with code {process.ExitCode}.");
+                    FailureMessage: stderrSessionNotFound);
+            }
+
+            if (process.ExitCode != 0 && !IsFinal(state))
+            {
+                var stderrLast = Volatile.Read(ref lastStderrLine);
+                var trimmedStderrLast = (stderrLast ?? string.Empty).Trim();
+                var suffix = string.IsNullOrWhiteSpace(trimmedStderrLast) ? string.Empty : $" Last stderr: {trimmedStderrLast}";
+
+                return new ClaudeRunResult(
+                    SessionNotFound: false,
+                    Cancelled: false,
+                    FailureMessage: $"claude exited with code {process.ExitCode}.{suffix}");
             }
 
             return new ClaudeRunResult(SessionNotFound: false, Cancelled: false, FailureMessage: null);
@@ -580,12 +767,111 @@ public sealed class A2aTaskManager
         JsonElement root,
         ref bool sawAnyTextDelta)
     {
+        void AppendClaudeToolEvent(
+            string kind,
+            string toolUseId,
+            string? toolName,
+            string? input,
+            string? output,
+            bool? isError = null)
+        {
+            if (string.IsNullOrWhiteSpace(toolUseId))
+            {
+                return;
+            }
+
+            var payload = new Dictionary<string, object?>
+            {
+                ["kind"] = kind,
+                ["toolUseId"] = toolUseId,
+                ["toolName"] = toolName,
+                ["input"] = input,
+                ["output"] = output,
+                ["isError"] = isError,
+                ["createdAtUtc"] = DateTimeOffset.UtcNow.ToString("O"),
+            };
+
+            AppendResult(
+                state,
+                new
+                {
+                    artifactUpdate = new
+                    {
+                        taskId = request.TaskId,
+                        contextId = request.ContextId,
+                        append = true,
+                        lastChunk = false,
+                        artifact = new
+                        {
+                            artifactId = $"artifact-claude-tools-{request.TaskId}",
+                            name = "claude-tools",
+                            parts = new object[]
+                            {
+                                new
+                                {
+                                    data = payload,
+                                },
+                            },
+                        },
+                    },
+                });
+        }
+
+        static string? ReadToolContentAsText(JsonElement value)
+        {
+            if (value.ValueKind == JsonValueKind.Undefined || value.ValueKind == JsonValueKind.Null)
+            {
+                return null;
+            }
+
+            if (value.ValueKind == JsonValueKind.String)
+            {
+                return value.GetString();
+            }
+
+            try
+            {
+                return JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web)
+                {
+                    WriteIndented = true,
+                });
+            }
+            catch
+            {
+                return value.ToString();
+            }
+        }
+
         var type = TryReadString(root, "type") ?? string.Empty;
 
         if (string.Equals(type, "stream_event", StringComparison.OrdinalIgnoreCase))
         {
             var ev = TryGetObject(root, "event");
             var evType = TryReadString(ev, "type") ?? string.Empty;
+            if (string.Equals(evType, "content_block_start", StringComparison.OrdinalIgnoreCase))
+            {
+                var block = TryGetObject(ev, "content_block");
+                var blockType = TryReadString(block, "type") ?? string.Empty;
+
+                if (string.Equals(blockType, "tool_use", StringComparison.OrdinalIgnoreCase))
+                {
+                    var toolUseId = TryReadString(block, "id") ?? string.Empty;
+                    var toolName = TryReadString(block, "name");
+                    var input = block.TryGetProperty("input", out var inputProp) ? ReadToolContentAsText(inputProp) : null;
+                    AppendClaudeToolEvent(kind: "tool_use", toolUseId, toolName, input, output: null);
+                }
+                else if (string.Equals(blockType, "tool_result", StringComparison.OrdinalIgnoreCase))
+                {
+                    var toolUseId = TryReadString(block, "tool_use_id") ?? string.Empty;
+                    var output = block.TryGetProperty("content", out var outputProp) ? ReadToolContentAsText(outputProp) : null;
+                    var isError = block.TryGetProperty("is_error", out var isErrorProp)
+                                  && isErrorProp.ValueKind == JsonValueKind.True;
+                    AppendClaudeToolEvent(kind: "tool_result", toolUseId, toolName: null, input: null, output, isError);
+                }
+
+                return;
+            }
+
             if (!string.Equals(evType, "content_block_delta", StringComparison.OrdinalIgnoreCase))
             {
                 return;
@@ -657,11 +943,6 @@ public sealed class A2aTaskManager
 
         if (string.Equals(type, "assistant", StringComparison.OrdinalIgnoreCase))
         {
-            if (sawAnyTextDelta)
-            {
-                return;
-            }
-
             var message = TryGetObject(root, "message");
             if (message.ValueKind != JsonValueKind.Object
                 || !message.TryGetProperty("content", out var content)
@@ -710,7 +991,31 @@ public sealed class A2aTaskManager
                     continue;
                 }
 
+                if (string.Equals(partType, "tool_use", StringComparison.OrdinalIgnoreCase))
+                {
+                    var toolUseId = TryReadString(part, "id") ?? string.Empty;
+                    var toolName = TryReadString(part, "name");
+                    var input = part.TryGetProperty("input", out var inputProp) ? ReadToolContentAsText(inputProp) : null;
+                    AppendClaudeToolEvent(kind: "tool_use", toolUseId, toolName, input, output: null);
+                    continue;
+                }
+
+                if (string.Equals(partType, "tool_result", StringComparison.OrdinalIgnoreCase))
+                {
+                    var toolUseId = TryReadString(part, "tool_use_id") ?? string.Empty;
+                    var output = part.TryGetProperty("content", out var outputProp) ? ReadToolContentAsText(outputProp) : null;
+                    var isError = part.TryGetProperty("is_error", out var isErrorProp)
+                                  && isErrorProp.ValueKind == JsonValueKind.True;
+                    AppendClaudeToolEvent(kind: "tool_result", toolUseId, toolName: null, input: null, output, isError);
+                    continue;
+                }
+
                 if (!string.Equals(partType, "text", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (sawAnyTextDelta)
                 {
                     continue;
                 }
@@ -1024,6 +1329,7 @@ public sealed class A2aTaskManager
             startInfo.FileName = string.IsNullOrWhiteSpace(configuredExecutable) ? "claude" : configuredExecutable;
         }
 
+        startInfo.ArgumentList.Add("--verbose");
         startInfo.ArgumentList.Add("--print");
         startInfo.ArgumentList.Add("--output-format");
         startInfo.ArgumentList.Add("stream-json");
@@ -1101,6 +1407,99 @@ public sealed class A2aTaskManager
             return null;
         }
 
+        static bool IsWslBashShim(string candidate)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                return false;
+            }
+
+            try
+            {
+                var full = Path.GetFullPath(candidate);
+                var systemBash = Path.Combine(Environment.SystemDirectory, "bash.exe");
+
+                if (string.Equals(full, systemBash, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                var windowsApps = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "Microsoft",
+                    "WindowsApps");
+
+                return full.StartsWith(windowsApps, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        static int ScoreBashCandidate(string candidate)
+        {
+            var normalized = candidate.Replace('/', '\\');
+
+            if (normalized.Contains("\\Git\\bin\\bash.exe", StringComparison.OrdinalIgnoreCase))
+            {
+                return 100;
+            }
+
+            if (normalized.Contains("\\Git\\usr\\bin\\bash.exe", StringComparison.OrdinalIgnoreCase))
+            {
+                return 90;
+            }
+
+            if (normalized.Contains("\\Git\\", StringComparison.OrdinalIgnoreCase))
+            {
+                return 80;
+            }
+
+            return 0;
+        }
+
+        static string PreferGitBinOverUsrBin(string candidate)
+        {
+            try
+            {
+                var full = Path.GetFullPath(candidate);
+                var normalized = full.Replace('/', '\\');
+
+                if (!normalized.EndsWith("\\Git\\usr\\bin\\bash.exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    return full;
+                }
+
+                var usrBinDir = Path.GetDirectoryName(full);
+                if (string.IsNullOrWhiteSpace(usrBinDir))
+                {
+                    return full;
+                }
+
+                var usrDir = Path.GetDirectoryName(usrBinDir);
+                if (string.IsNullOrWhiteSpace(usrDir))
+                {
+                    return full;
+                }
+
+                var gitRoot = Path.GetDirectoryName(usrDir);
+                if (string.IsNullOrWhiteSpace(gitRoot))
+                {
+                    return full;
+                }
+
+                var gitBin = Path.Combine(gitRoot, "bin", "bash.exe");
+                return File.Exists(gitBin) ? gitBin : full;
+            }
+            catch
+            {
+                return candidate;
+            }
+        }
+
+        var discovered = new List<string>();
+
         var pathVar = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
         foreach (var entry in pathVar.Split(';',
                      StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -1116,7 +1515,10 @@ public sealed class A2aTaskManager
                 var candidate = Path.Combine(dir, "bash.exe");
                 if (File.Exists(candidate))
                 {
-                    return candidate;
+                    if (!IsWslBashShim(candidate))
+                    {
+                        discovered.Add(candidate);
+                    }
                 }
             }
             catch
@@ -1142,7 +1544,10 @@ public sealed class A2aTaskManager
             {
                 if (File.Exists(candidate))
                 {
-                    return candidate;
+                    if (!IsWslBashShim(candidate))
+                    {
+                        discovered.Add(candidate);
+                    }
                 }
             }
             catch
@@ -1151,7 +1556,15 @@ public sealed class A2aTaskManager
             }
         }
 
-        return null;
+        var best = discovered
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(PreferGitBinOverUsrBin)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(ScoreBashCandidate)
+            .ThenBy(s => s, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+
+        return string.IsNullOrWhiteSpace(best) ? null : best;
     }
 
     private static string BuildClaudePrompt(string userText, IReadOnlyList<A2aImageInput> images)
@@ -1187,6 +1600,7 @@ public sealed class A2aTaskManager
         A2aTaskState state,
         A2aTaskStartRequest request,
         StreamReader reader,
+        Action<string>? onLine,
         CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -1204,6 +1618,15 @@ public sealed class A2aTaskManager
             if (line is null)
             {
                 break;
+            }
+
+            try
+            {
+                onLine?.Invoke(line);
+            }
+            catch
+            {
+                // ignore
             }
 
             var text = $"{line}\n";
@@ -1866,6 +2289,9 @@ public sealed record A2aTaskStartRequest(
     string AgentMessageId,
     ToolType ToolType = ToolType.Codex,
     string? Model = null,
+    Guid? ProviderId = null,
+    ProviderRequestType? ProviderRequestType = null,
+    string? ProviderAzureApiVersion = null,
     string? ProviderAddress = null,
     string? ProviderApiKey = null);
 

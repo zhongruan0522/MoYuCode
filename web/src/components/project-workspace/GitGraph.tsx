@@ -2,6 +2,13 @@ import { useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 
+export type GitGraphCommit = {
+  hash: string
+  refs: string[]
+  subject: string
+  raw: string
+}
+
 type GitGraphRow =
   | {
       kind: 'commit'
@@ -241,9 +248,11 @@ function GraphSvg({
 export function GitGraph({
   lines,
   className,
+  onSelectCommit,
 }: {
   lines: string[]
   className?: string
+  onSelectCommit?: (commit: GitGraphCommit) => void
 }) {
   const rows = useMemo(() => parseGitGraphLines(lines ?? []), [lines])
 
@@ -280,12 +289,22 @@ export function GitGraph({
             title={row.raw}
             role="button"
             tabIndex={0}
-            onClick={() => {
+            onClick={(e) => {
+              if (onSelectCommit && !(e.metaKey || e.ctrlKey || e.altKey || e.shiftKey)) {
+                onSelectCommit({ hash: row.hash, refs: row.refs, subject: row.subject, raw: row.raw })
+                return
+              }
+
               void navigator.clipboard?.writeText?.(row.hash)
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault()
+                if (onSelectCommit && !(e.metaKey || e.ctrlKey || e.altKey || e.shiftKey)) {
+                  onSelectCommit({ hash: row.hash, refs: row.refs, subject: row.subject, raw: row.raw })
+                  return
+                }
+
                 void navigator.clipboard?.writeText?.(row.hash)
               }
             }}

@@ -180,6 +180,11 @@ public static class A2aEndpoints
         var toolType = ToolType.Codex;
         string? model = null;
         var modelOverride = ReadString(@params, "model");
+        var providerIdOverrideRaw = ReadString(@params, "providerId")
+            ?? ReadString(@params, "providerID");
+        Guid? providerId = null;
+        ProviderRequestType? providerRequestType = null;
+        string? providerAzureApiVersion = null;
         string? providerAddress = null;
         string? providerApiKey = null;
 
@@ -207,18 +212,42 @@ public static class A2aEndpoints
             toolType = project.ToolType;
             model = project.Model;
 
-            if (project.Provider is not null)
+            ProviderEntity? selectedProvider = null;
+            if (!string.IsNullOrWhiteSpace(providerIdOverrideRaw))
             {
-                providerAddress = project.Provider.Address;
-                providerApiKey = project.Provider.ApiKey;
+                if (!Guid.TryParse(providerIdOverrideRaw.Trim(), out var providerOverrideId))
+                {
+                    await TrySendErrorAsync(code: -32602, message: "Invalid params.providerId");
+                    return;
+                }
 
-                if (toolType == ToolType.Codex && project.Provider.RequestType == ProviderRequestType.Anthropic)
+                selectedProvider = store.Providers.FirstOrDefault(p => p.Id == providerOverrideId);
+                if (selectedProvider is null)
+                {
+                    await TrySendErrorAsync(code: -32602, message: "Provider not found.");
+                    return;
+                }
+            }
+            else
+            {
+                selectedProvider = project.Provider;
+            }
+
+            if (selectedProvider is not null)
+            {
+                providerId = selectedProvider.Id;
+                providerRequestType = selectedProvider.RequestType;
+                providerAzureApiVersion = selectedProvider.AzureApiVersion;
+                providerAddress = selectedProvider.Address;
+                providerApiKey = selectedProvider.ApiKey;
+
+                if (toolType == ToolType.Codex && selectedProvider.RequestType == ProviderRequestType.Anthropic)
                 {
                     await TrySendErrorAsync(code: -32602, message: "Codex projects do not support Anthropic providers.");
                     return;
                 }
 
-                if (toolType == ToolType.ClaudeCode && project.Provider.RequestType != ProviderRequestType.Anthropic)
+                if (toolType == ToolType.ClaudeCode && selectedProvider.RequestType != ProviderRequestType.Anthropic)
                 {
                     await TrySendErrorAsync(code: -32602, message: "Claude Code projects require an Anthropic-compatible provider.");
                     return;
@@ -268,6 +297,9 @@ public static class A2aEndpoints
                 AgentMessageId: agentMessageId,
                 ToolType: toolType,
                 Model: model,
+                ProviderId: providerId,
+                ProviderRequestType: providerRequestType,
+                ProviderAzureApiVersion: providerAzureApiVersion,
                 ProviderAddress: providerAddress,
                 ProviderApiKey: providerApiKey),
             cancellationToken);

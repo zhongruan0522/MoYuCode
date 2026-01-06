@@ -22,7 +22,11 @@ import type {
   GitCommitRequest,
   GitCommitResponse,
   GitDiffResponse,
+  GitBranchesResponse,
+  GitCheckoutRequest,
   GitLogResponse,
+  GitCommitDiffResponse,
+  GitCreateBranchRequest,
   GitRepoRequest,
   GitStageRequest,
   GitStatusResponse,
@@ -175,9 +179,17 @@ export const api = {
   git: {
     status: (path: string) =>
       http<GitStatusResponse>(`/api/git/status?path=${encodeURIComponent(path)}`),
+    branches: (path: string) =>
+      http<GitBranchesResponse>(`/api/git/branches?path=${encodeURIComponent(path)}`),
+    createBranch: (body: GitCreateBranchRequest) =>
+      http<string>(`/api/git/branches`, { method: 'POST', body: JSON.stringify(body) }),
     log: (path: string, maxCount = 200) =>
       http<GitLogResponse>(
         `/api/git/log?path=${encodeURIComponent(path)}&maxCount=${encodeURIComponent(String(maxCount))}`,
+      ),
+    commitDiff: (path: string, hash: string) =>
+      http<GitCommitDiffResponse>(
+        `/api/git/commit-diff?path=${encodeURIComponent(path)}&hash=${encodeURIComponent(hash)}`,
       ),
     diff: (path: string, file: string, opts?: { staged?: boolean }) => {
       const staged = opts?.staged ? '&staged=true' : ''
@@ -194,6 +206,8 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(body),
       }),
+    checkout: (body: GitCheckoutRequest) =>
+      http<string>(`/api/git/checkout`, { method: 'POST', body: JSON.stringify(body) }),
     pull: (body: GitRepoRequest) =>
       http<string>(`/api/git/pull`, { method: 'POST', body: JSON.stringify(body) }),
     push: (body: GitRepoRequest) =>

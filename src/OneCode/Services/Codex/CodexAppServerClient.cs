@@ -7,6 +7,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
 using Microsoft.Extensions.Configuration;
+using OneCode.Data;
+using OneCode.Data.Entities;
 
 namespace OneCode.Services.Codex;
 
@@ -14,6 +16,7 @@ public sealed class CodexAppServerClient : IAsyncDisposable
 {
     private readonly ILogger<CodexAppServerClient> _logger;
     private readonly IConfiguration _configuration;
+    private readonly JsonDataStore _store;
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromMinutes(2);
 
     private readonly SemaphoreSlim _startLock = new(1, 1);
@@ -32,10 +35,14 @@ public sealed class CodexAppServerClient : IAsyncDisposable
     private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonElement>> _pending = new();
     private readonly ConcurrentDictionary<Guid, Channel<CodexAppServerEvent>> _subscribers = new();
 
-    public CodexAppServerClient(ILogger<CodexAppServerClient> logger, IConfiguration configuration)
+    public CodexAppServerClient(
+        ILogger<CodexAppServerClient> logger,
+        IConfiguration configuration,
+        JsonDataStore store)
     {
         _logger = logger;
         _configuration = configuration;
+        _store = store;
     }
 
     public async Task EnsureStartedAsync(CancellationToken cancellationToken)
@@ -173,6 +180,7 @@ public sealed class CodexAppServerClient : IAsyncDisposable
         if (!string.IsNullOrWhiteSpace(configuredExecutable))
         {
             ConfigureCodexStartInfo(startInfo, configuredExecutable);
+            AddOneCodeProviderApiKeys(startInfo);
             return startInfo;
         }
 
@@ -206,6 +214,7 @@ public sealed class CodexAppServerClient : IAsyncDisposable
             {
                 startInfo.FileName = codexExe;
                 startInfo.ArgumentList.Add("app-server");
+                AddOneCodeProviderApiKeys(startInfo);
                 return startInfo;
             }
 
@@ -232,12 +241,41 @@ public sealed class CodexAppServerClient : IAsyncDisposable
                 }
             }
 
+            AddOneCodeProviderApiKeys(startInfo);
             return startInfo;
         }
 
         startInfo.FileName = "codex";
         startInfo.ArgumentList.Add("app-server");
+        AddOneCodeProviderApiKeys(startInfo);
         return startInfo;
+    }
+
+    private void AddOneCodeProviderApiKeys(ProcessStartInfo startInfo)
+    {
+        try
+        {
+            foreach (var provider in _store.Providers)
+            {
+                if (provider.RequestType == ProviderRequestType.Anthropic)
+                {
+                    continue;
+                }
+
+                var key = (provider.ApiKey ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(key))
+                {
+                    continue;
+                }
+
+                var envName = $"ONECODE_API_KEY_{provider.Id:N}";
+                startInfo.Environment[envName] = key;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to add provider API keys to codex app-server environment.");
+        }
     }
 
     private static void ConfigureCodexStartInfo(ProcessStartInfo startInfo, string configuredExecutable)

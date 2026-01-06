@@ -218,6 +218,19 @@ export type GitLogResponse = {
   lines: string[]
 }
 
+export type GitBranchesResponse = {
+  repoRoot: string
+  current: string | null
+  branches: string[]
+}
+
+export type GitCommitDiffResponse = {
+  hash: string
+  diff: string
+  truncated: boolean
+  files: string[]
+}
+
 export type GitDiffResponse = {
   file: string
   diff: string
@@ -227,6 +240,18 @@ export type GitDiffResponse = {
 export type GitCommitRequest = {
   path: string
   message: string
+}
+
+export type GitCheckoutRequest = {
+  path: string
+  branch: string
+}
+
+export type GitCreateBranchRequest = {
+  path: string
+  branch: string
+  checkout: boolean
+  startPoint?: string | null
 }
 
 export type GitRepoRequest = {

@@ -11,7 +11,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '@/api/client'
-import type { ProjectDto } from '@/api/types'
+import type { ProjectDto, ProviderDto, ToolType } from '@/api/types'
 import type { CodeSelection, WorkspaceFileRef } from '@/lib/chatPromptXml'
 import { buildUserPromptWithWorkspaceContext } from '@/lib/chatWorkspaceContextXml'
 import { cn } from '@/lib/utils'
@@ -20,11 +20,12 @@ import { Modal } from '@/components/Modal'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Separator } from '@/components/ui/separator'
 import {
   Select,
   SelectContent,
   SelectItem,
-  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -35,7 +36,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/animate-ui/primitives/animate/tooltip'
-import { ChevronDown, Eye, EyeOff, Image as ImageIcon, X } from 'lucide-react'
+import { Check, ChevronDown, Eye, EyeOff, Image as ImageIcon, X } from 'lucide-react'
+import { useLocation } from 'react-router-dom'
 
 type ChatRole = 'user' | 'agent' | 'system'
 
@@ -56,6 +58,10 @@ type ChatMessage = {
   text: string
   images?: ChatImage[]
   toolName?: string
+  toolUseId?: string
+  toolInput?: string
+  toolOutput?: string
+  toolIsError?: boolean
 }
 
 type CodexEventLogItem = {
@@ -105,6 +111,11 @@ type TokenUsageArtifact = {
   total?: TokenUsageSnapshot
   last?: TokenUsageSnapshot
   modelContextWindow?: number
+}
+
+type ModelSelection = {
+  providerId: string
+  model: string
 }
 
 function getApiBase(): string {
@@ -854,6 +865,96 @@ const ChatToolMessage = memo(function ChatToolMessage({
   )
 })
 
+const ChatClaudeToolMessage = memo(function ChatClaudeToolMessage({
+  message,
+  align,
+  open,
+  onToggle,
+}: {
+  message: ChatMessage
+  align: ChatAlign
+  open: boolean
+  onToggle: (id: string) => void
+}) {
+  const toolName = message.toolName ?? 'tool'
+  const input = message.toolInput ?? message.text ?? ''
+  const output = message.toolOutput ?? ''
+  const isError = Boolean(message.toolIsError)
+
+  const inputPreview = input ? truncateInlineText(input, 120) : ''
+  const outputPreview = output ? truncateInlineText(output, 120) : ''
+
+  return (
+    <ChatMessageRow align={align}>
+      <div className="max-w-[80%] overflow-hidden rounded-lg border bg-muted/30 text-foreground">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className={cn(
+            '!h-auto w-full items-start justify-between gap-3 px-3 py-2 text-xs font-medium text-muted-foreground',
+            'hover:bg-accent/40',
+            '!rounded-none',
+          )}
+          aria-expanded={open}
+          aria-controls={`claude-tool-${message.id}`}
+          onClick={() => onToggle(message.id)}
+        >
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-2">
+              <span>{toolName}</span>
+              <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                Claude
+              </Badge>
+              {isError ? (
+                <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">
+                  error
+                </Badge>
+              ) : null}
+            </span>
+            {inputPreview ? (
+              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                Input: {inputPreview}
+              </span>
+            ) : null}
+            {outputPreview ? (
+              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                Output: {outputPreview}
+              </span>
+            ) : null}
+          </span>
+          <ChevronDown
+            className={cn(
+              'mt-0.5 size-4 shrink-0 transition-transform',
+              open ? 'rotate-0' : '-rotate-90',
+            )}
+          />
+        </Button>
+
+        {open ? (
+          <div id={`claude-tool-${message.id}`} className="px-3 pb-3 text-xs space-y-2">
+            {input ? (
+              <div>
+                <div className="text-[11px] font-medium text-muted-foreground">Input</div>
+                <pre className="mt-1 whitespace-pre-wrap break-words">{input}</pre>
+              </div>
+            ) : null}
+
+            {output ? (
+              <div>
+                <div className="text-[11px] font-medium text-muted-foreground">Output</div>
+                <pre className="mt-1 whitespace-pre-wrap break-words">{output}</pre>
+              </div>
+            ) : (
+              <div className="text-[11px] text-muted-foreground">等待工具输出…</div>
+            )}
+          </div>
+        ) : null}
+      </div>
+    </ChatMessageRow>
+  )
+})
+
 const ChatTextMessage = memo(function ChatTextMessage({
   message,
   align,
@@ -913,6 +1014,7 @@ const ChatMessageList = memo(function ChatMessageList({
   toolOpenById,
   setToolOpenById,
   tokenByMessageId,
+  toolType,
 }: {
   messages: ChatMessage[]
   sending: boolean
@@ -923,6 +1025,7 @@ const ChatMessageList = memo(function ChatMessageList({
   toolOpenById: OpenById
   setToolOpenById: SetOpenById
   tokenByMessageId: Record<string, TokenUsageArtifact>
+  toolType: ToolType
 }) {
   const toggleThinkOpen = useCallback(
     (id: string, defaultOpen: boolean) => {
@@ -971,8 +1074,9 @@ const ChatMessageList = memo(function ChatMessageList({
 
         if (m.kind === 'tool') {
           const open = toolOpenById[m.id] ?? false
+          const ToolComponent = toolType === 'ClaudeCode' ? ChatClaudeToolMessage : ChatToolMessage
           return (
-            <ChatToolMessage
+            <ToolComponent
               key={m.id}
               message={m}
               align={align}
@@ -1045,6 +1149,7 @@ export function ProjectChat({
   codeSelection,
   onClearCodeSelection,
   onToolOutput,
+  currentToolType,
 }: {
   project: ProjectDto
   detailsOpen: boolean
@@ -1053,11 +1158,13 @@ export function ProjectChat({
   codeSelection?: CodeSelection | null
   onClearCodeSelection?: () => void
   onToolOutput?: (chunk: string) => void
+  currentToolType?: 'Codex' | 'ClaudeCode' | null
 }) {
   const apiBase = useMemo(() => getApiBase(), [])
   const sessionIdRef = useRef<string>(createUuid())
   const workspacePath = project.workspacePath.trim()
 
+  const location = useLocation(); // 2. 获取当前 location 对象
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
   const [draftImages, setDraftImages] = useState<DraftImage[]>([])
@@ -1069,12 +1176,13 @@ export function ProjectChat({
   const [canceling, setCanceling] = useState(false)
   const [chatError, setChatError] = useState<string | null>(null)
   const [toolOutput, setToolOutput] = useState('')
-  const [modelOverride, setModelOverride] = useState('')
-  const [providerModelOptions, setProviderModelOptions] = useState<string[]>([])
-  const [providerModelsLoaded, setProviderModelsLoaded] = useState(false)
+  const [providers, setProviders] = useState<ProviderDto[]>([])
+  const [providersLoaded, setProvidersLoaded] = useState(false)
+  const [modelSelection, setModelSelection] = useState<ModelSelection | null>(null)
   const [customModels, setCustomModels] = useState<string[]>([])
   const [customModelsLoaded, setCustomModelsLoaded] = useState(false)
   const [addModelOpen, setAddModelOpen] = useState(false)
+  const [addModelProviderId, setAddModelProviderId] = useState('')
   const [addModelDraft, setAddModelDraft] = useState('')
   const [addModelError, setAddModelError] = useState<string | null>(null)
 
@@ -1106,36 +1214,76 @@ export function ProjectChat({
   )
 
   const [rawEvents, setRawEvents] = useState<CodexEventLogItem[]>([])
-  const addModelSentinel = '__onecode_add_model__'
-  const modelDefaultSentinel = '__onecode_model_default__'
+  const [modelPickerOpen, setModelPickerOpen] = useState(false)
+  const [modelPickerQuery, setModelPickerQuery] = useState('')
+  const modelPickerSearchRef = useRef<HTMLInputElement | null>(null)
+  const [customModelsByProvider, setCustomModelsByProvider] = useState<Record<string, string[]>>({})
 
-  const customModelStorageKey = useMemo(() => {
-    const providerKey = project.providerId ? project.providerId : 'default'
-    return `onecode:chat:custom-models:v1:${project.toolType}:${providerKey}`
-  }, [project.providerId, project.toolType])
+  const modelSelectionStorageKey = useMemo(() => {
+    return `onecode:chat:model-selection:v2:${project.id}`
+  }, [project.id])
 
-  const modelOverrideStorageKey = useMemo(() => {
+  const legacyModelOverrideStorageKey = useMemo(() => {
     return `onecode:chat:model-override:v1:${project.id}`
   }, [project.id])
 
-  const availableModels = useMemo(() => {
-    const seen = new Set<string>()
-    const next: string[] = []
+  const activeProviderId = useMemo(() => {
+    return modelSelection?.providerId ?? project.providerId ?? null
+  }, [modelSelection?.providerId, project.providerId])
 
-    const add = (raw: string) => {
-      const model = (raw ?? '').trim()
-      if (!model) return
-      const key = model.toLowerCase()
-      if (seen.has(key)) return
-      seen.add(key)
-      next.push(model)
-    }
+  const customModelStorageKey = useMemo(() => {
+    const providerKey = activeProviderId ?? 'default'
+    return `onecode:chat:custom-models:v1:${project.toolType}:${providerKey}`
+  }, [activeProviderId, project.toolType])
 
-    for (const m of providerModelOptions) add(m)
-    for (const m of customModels) add(m)
+  const activeProvider = useMemo(() => {
+    if (!activeProviderId) return null
+    return providers.find((p) => p.id === activeProviderId) ?? null
+  }, [activeProviderId, providers])
 
-    return next
-  }, [customModels, providerModelOptions])
+  const modelPickerQueryKey = useMemo(() => {
+    return modelPickerQuery.trim().toLowerCase()
+  }, [modelPickerQuery])
+
+  const modelPickerProviderGroups = useMemo(() => {
+    if (!providersLoaded) return []
+
+    const query = modelPickerQueryKey
+
+    return providers
+      .map((p) => {
+        const providerName = (p.name ?? '').trim()
+        const providerMatches = query ? providerName.toLowerCase().includes(query) : false
+
+        const rawCustomModels =
+          customModelsByProvider[p.id] ??
+          (p.id === activeProviderId && customModelsLoaded ? customModels : [])
+
+        const customDeduped = rawCustomModels.filter(
+          (m) => !p.models.some((existing) => existing.toLowerCase() === m.toLowerCase()),
+        )
+
+        const matchesQuery = (m: string) =>
+          !query || providerMatches || m.toLowerCase().includes(query)
+
+        const models = p.models.filter(matchesQuery)
+        const custom = customDeduped.filter(matchesQuery)
+
+        const showGroup = !query || providerMatches || models.length > 0 || custom.length > 0
+
+        return { provider: p, models, customModels: custom, showGroup }
+      })
+      .filter((g) => g.showGroup)
+  }, [
+    activeProviderId,
+    customModels,
+    customModelsByProvider,
+    customModelsLoaded,
+    modelPickerQueryKey,
+    project.toolType,
+    providers,
+    providersLoaded,
+  ])
 
   useEffect(() => {
     if (!scrollRef.current) return
@@ -1143,34 +1291,97 @@ export function ProjectChat({
   }, [messages])
 
   useEffect(() => {
-    setModelOverride('')
-
-    if (project.toolType !== 'Codex') return
     if (typeof window === 'undefined') return
 
     try {
-      const raw = window.localStorage.getItem(modelOverrideStorageKey) ?? ''
-      setModelOverride(raw.trim())
-    } catch {
-      // ignore
-    }
-  }, [modelOverrideStorageKey, project.toolType])
+      setModelSelection(null)
 
-  useEffect(() => {
-    if (project.toolType !== 'Codex') return
-    if (typeof window === 'undefined') return
+      const raw = window.localStorage.getItem(modelSelectionStorageKey)
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown
+        if (parsed && typeof parsed === 'object') {
+          const obj = parsed as { providerId?: unknown; model?: unknown }
+          const providerId = typeof obj.providerId === 'string' ? obj.providerId.trim() : ''
+          const model = typeof obj.model === 'string' ? obj.model.trim() : ''
+          if (providerId && model) {
+            setModelSelection({ providerId, model })
+            return
+          }
+        }
+      }
 
-    try {
-      const value = modelOverride.trim()
-      if (!value) {
-        window.localStorage.removeItem(modelOverrideStorageKey)
-      } else {
-        window.localStorage.setItem(modelOverrideStorageKey, value)
+      const legacyRaw = window.localStorage.getItem(legacyModelOverrideStorageKey) ?? ''
+      const legacyModel = legacyRaw.trim()
+      if (legacyModel && project.providerId) {
+        setModelSelection({ providerId: project.providerId, model: legacyModel })
       }
     } catch {
       // ignore
     }
-  }, [modelOverride, modelOverrideStorageKey, project.toolType])
+  }, [
+    legacyModelOverrideStorageKey,
+    modelSelectionStorageKey,
+    project.providerId,
+  ])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    try {
+      if (!modelSelection) {
+        window.localStorage.removeItem(modelSelectionStorageKey)
+      } else {
+        window.localStorage.setItem(modelSelectionStorageKey, JSON.stringify(modelSelection))
+      }
+
+      window.localStorage.removeItem(legacyModelOverrideStorageKey)
+    } catch {
+      // ignore
+    }
+  }, [
+    legacyModelOverrideStorageKey,
+    modelSelection,
+    modelSelectionStorageKey,
+  ])
+
+  useEffect(() => {
+    if (!modelPickerOpen) return
+    if (typeof window === 'undefined') return
+
+    const timer = window.setTimeout(() => {
+      modelPickerSearchRef.current?.focus()
+    }, 0)
+
+    return () => window.clearTimeout(timer)
+  }, [modelPickerOpen])
+
+  useEffect(() => {
+    if (!modelPickerOpen) {
+      setCustomModelsByProvider({})
+      return
+    }
+    if (typeof window === 'undefined') return
+
+    const next: Record<string, string[]> = {}
+    for (const provider of providers) {
+      const customKey = `onecode:chat:custom-models:v1:${project.toolType}:${provider.id}`
+      try {
+        const raw = window.localStorage.getItem(customKey)
+        if (!raw) continue
+        const parsed = JSON.parse(raw) as unknown
+        if (!Array.isArray(parsed)) continue
+
+        next[provider.id] = parsed
+          .filter((m): m is string => typeof m === 'string')
+          .map((m) => m.trim())
+          .filter(Boolean)
+      } catch {
+        // ignore
+      }
+    }
+
+    setCustomModelsByProvider(next)
+  }, [modelPickerOpen, project.toolType, providers])
 
   useEffect(() => {
     draftImagesRef.current = draftImages
@@ -1211,33 +1422,31 @@ export function ProjectChat({
   }, [workspacePath])
 
   useEffect(() => {
-    setProviderModelOptions([])
-    setProviderModelsLoaded(false)
-
-    const providerId = project.providerId
-    if (!providerId) {
-      setProviderModelsLoaded(true)
-      return
-    }
+    setProviders([])
+    setProvidersLoaded(false)
 
     let canceled = false
     void (async () => {
       try {
-        const providers = await api.providers.list()
+        const allProviders = await api.providers.list()
         if (canceled) return
-        const provider = providers.find((p) => p.id === providerId) ?? null
-        setProviderModelOptions(provider?.models ?? [])
+        const isClaudeRoute = location.pathname.includes('/codex') || location.pathname.includes('/claude');
+        if (isClaudeRoute) {
+          setProviders(allProviders.filter((p) => p.requestType === 'Anthropic'))
+        } else {
+          setProviders(allProviders.filter((p) => p.requestType !== 'Anthropic'))
+        }
       } catch {
-        if (!canceled) setProviderModelOptions([])
+        if (!canceled) setProviders([])
       } finally {
-        if (!canceled) setProviderModelsLoaded(true)
+        if (!canceled) setProvidersLoaded(true)
       }
     })()
 
     return () => {
       canceled = true
     }
-  }, [project.providerId])
+  }, [project.toolType, currentToolType])
 
   useEffect(() => {
     setCustomModels([])
@@ -1266,29 +1475,31 @@ export function ProjectChat({
   }, [customModelStorageKey])
 
   useEffect(() => {
-    if (project.toolType !== 'Codex') return
-
-    const optionsLoaded = providerModelsLoaded && customModelsLoaded
+    const optionsLoaded = providersLoaded && customModelsLoaded
     if (!optionsLoaded) return
 
-    const selected = modelOverride.trim()
-    if (!selected) return
+    if (!modelSelection) return
 
-    const map = new Map<string, string>()
-    for (const m of availableModels) {
-      map.set(m.toLowerCase(), m)
-    }
-
-    const normalized = map.get(selected.toLowerCase()) ?? null
-    if (!normalized) {
-      setModelOverride('')
+    const provider = providers.find((p) => p.id === modelSelection.providerId) ?? null
+    if (!provider) {
+      setModelSelection(null)
       return
     }
 
-    if (normalized !== selected) {
-      setModelOverride(normalized)
+    const map = new Map<string, string>()
+    for (const m of provider.models) map.set(m.toLowerCase(), m)
+    for (const m of customModels) map.set(m.toLowerCase(), m)
+
+    const normalized = map.get(modelSelection.model.toLowerCase()) ?? null
+    if (!normalized) {
+      setModelSelection(null)
+      return
     }
-  }, [availableModels, customModelsLoaded, modelOverride, project.toolType, providerModelsLoaded])
+
+    if (normalized !== modelSelection.model) {
+      setModelSelection({ ...modelSelection, model: normalized })
+    }
+  }, [customModels, customModelsLoaded, modelSelection, providers, providersLoaded])
 
   useEffect(() => {
     if (!mentionMode) return
@@ -1351,10 +1562,11 @@ export function ProjectChat({
   )
 
   const openAddModelDialog = useCallback(() => {
+    setAddModelProviderId(activeProviderId ?? '')
     setAddModelDraft('')
     setAddModelError(null)
     setAddModelOpen(true)
-  }, [])
+  }, [activeProviderId])
 
   const removeDraftImage = useCallback((clientId: string) => {
     setDraftImages((prev) => {
@@ -1654,6 +1866,8 @@ export function ProjectChat({
     let thinkSegmentIndex = 0
     let activeThinkMessageId: string | null = null
     const seenToolCalls = new Set<string>()
+    const toolMessageIdByUseId = new Map<string, string>()
+    let sawFinal = false
 
     setMessages((prev) => [
       ...prev,
@@ -1700,7 +1914,9 @@ export function ProjectChat({
           cwd: project.workspacePath,
           contextId: sessionIdRef.current,
           taskId,
-          ...(modelOverride.trim() ? { model: modelOverride.trim() } : {}),
+          ...(modelSelection
+            ? { model: modelSelection.model, providerId: modelSelection.providerId }
+            : {}),
           message: {
             role: 'user',
             messageId: userMessageId,
@@ -1770,13 +1986,14 @@ export function ProjectChat({
               updateMessageText(agentMessageId, (prev) => prev + chunk)
             }
           }
+        }
 
-          if (statusUpdate.final) {
-            setSending(false)
-            setActiveReasoningMessageId(null)
-            setActiveTaskId(null)
-            setCanceling(false)
-          }
+        if (statusUpdate?.final) {
+          sawFinal = true
+          setSending(false)
+          setActiveReasoningMessageId(null)
+          setActiveTaskId(null)
+          setCanceling(false)
         }
 
         const artifactUpdate = (resultObj.artifactUpdate ?? null) as A2aArtifactUpdate | null
@@ -1825,6 +2042,136 @@ export function ProjectChat({
             }))
             break
           }
+          continue
+        }
+
+        if (artifactName === 'claude-tools') {
+          const parts = (artifact?.parts ?? []) as unknown[]
+          for (const part of parts) {
+            if (!part || typeof part !== 'object') continue
+            const dataValue = (part as { data?: unknown }).data
+            if (!dataValue || typeof dataValue !== 'object') continue
+
+            const dataObj = dataValue as {
+              kind?: unknown
+              toolUseId?: unknown
+              toolName?: unknown
+              input?: unknown
+              output?: unknown
+              isError?: unknown
+            }
+
+            const kind = String(dataObj.kind ?? '').trim()
+            const toolUseId = String(dataObj.toolUseId ?? '').trim()
+            if (!kind || !toolUseId) continue
+
+            const toolName = typeof dataObj.toolName === 'string' ? dataObj.toolName : undefined
+            const input =
+              typeof dataObj.input === 'string'
+                ? dataObj.input
+                : dataObj.input != null
+                  ? stringifyToolArgs(dataObj.input)
+                  : ''
+            const output =
+              typeof dataObj.output === 'string'
+                ? dataObj.output
+                : dataObj.output != null
+                  ? stringifyToolArgs(dataObj.output)
+                  : ''
+            const isError = dataObj.isError === true
+
+            const ensureToolMessageId = () => {
+              const existing = toolMessageIdByUseId.get(toolUseId)
+              if (existing) return existing
+              const created = `msg-claude-tool-${taskId}-${toolUseId}`
+              toolMessageIdByUseId.set(toolUseId, created)
+              return created
+            }
+
+            if (kind === 'tool_use') {
+              const toolMessageId = ensureToolMessageId()
+              const toolMessage: ChatMessage = {
+                id: toolMessageId,
+                role: 'agent',
+                kind: 'tool',
+                toolName: toolName ?? 'tool',
+                toolUseId,
+                toolInput: input,
+                text: input,
+              }
+
+              setToolOpenById((prev) =>
+                prev[toolMessageId] !== undefined ? prev : { ...prev, [toolMessageId]: false },
+              )
+
+              setMessages((prev) => {
+                const existingIndex = prev.findIndex((m) => m.id === toolMessageId)
+                if (existingIndex >= 0) {
+                  const next = [...prev]
+                  const existing = next[existingIndex]
+                  next[existingIndex] = {
+                    ...existing,
+                    toolName: toolMessage.toolName,
+                    toolUseId,
+                    toolInput: input || existing.toolInput,
+                    text: input || existing.text,
+                  }
+                  return next
+                }
+
+                return insertBeforeMessage(prev, agentMessageId, toolMessage)
+              })
+
+              activeThinkMessageId = null
+              setActiveReasoningMessageId(null)
+              continue
+            }
+
+            if (kind === 'tool_result') {
+              const toolMessageId = ensureToolMessageId()
+              setToolOpenById((prev) =>
+                prev[toolMessageId] !== undefined ? prev : { ...prev, [toolMessageId]: false },
+              )
+
+              setMessages((prev) => {
+                const existingIndex = prev.findIndex((m) => m.id === toolMessageId)
+                if (existingIndex >= 0) {
+                  const next = [...prev]
+                  const existing = next[existingIndex]
+                  const mergedOutput = existing.toolOutput
+                    ? output && !existing.toolOutput.includes(output)
+                      ? `${existing.toolOutput}\n\n${output}`
+                      : existing.toolOutput
+                    : output
+                  next[existingIndex] = {
+                    ...existing,
+                    toolUseId,
+                    toolOutput: mergedOutput,
+                    toolIsError: isError || existing.toolIsError,
+                  }
+                  return next
+                }
+
+                const toolMessage: ChatMessage = {
+                  id: toolMessageId,
+                  role: 'agent',
+                  kind: 'tool',
+                  toolName: toolName ?? 'tool',
+                  toolUseId,
+                  toolOutput: output,
+                  toolIsError: isError,
+                  text: '',
+                }
+
+                return insertBeforeMessage(prev, agentMessageId, toolMessage)
+              })
+
+              activeThinkMessageId = null
+              setActiveReasoningMessageId(null)
+              continue
+            }
+          }
+
           continue
         }
 
@@ -1881,6 +2228,13 @@ export function ProjectChat({
           }
         }
       }
+
+      if (!sawFinal) {
+        setSending(false)
+        setActiveReasoningMessageId(null)
+        setActiveTaskId(null)
+        setCanceling(false)
+      }
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
         setChatError((e as Error).message)
@@ -1897,9 +2251,10 @@ export function ProjectChat({
     apiBase,
     draft,
     draftImages,
-    modelOverride,
+    modelSelection,
     onToolOutput,
     project.id,
+    project.toolType,
     project.workspacePath,
     sending,
     updateMessageText,
@@ -1973,12 +2328,13 @@ export function ProjectChat({
               toolOpenById={toolOpenById}
               setToolOpenById={setToolOpenById}
               tokenByMessageId={tokenByMessageId}
+              toolType={project.toolType}
             />
           </div>
 
           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-card via-card/80 to-transparent px-4 pb-4 pt-10">
             <div className="pointer-events-auto mx-auto max-w-3xl">
-              <div className="relative rounded-xl border bg-background/80 p-1.5 shadow-lg backdrop-blur">
+              <div className="relative rounded-lg border bg-background/80 p-1 shadow-lg backdrop-blur">
                 {mentionToken ? (
                   <div className="absolute inset-x-2 bottom-full mb-2 overflow-hidden rounded-xl border bg-popover shadow-lg">
                     <div className="border-b px-2 py-1 text-[11px] text-muted-foreground">
@@ -1999,17 +2355,19 @@ export function ProjectChat({
                       ) : mentionSuggestions.length ? (
                         <div className="space-y-0.5">
                           {mentionSuggestions.map((item, idx) => (
-                            <button
+                            <Button
                               key={item.fullPath}
                               type="button"
                               className={cn(
-                                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left',
+                                'h-auto w-full items-center justify-start gap-2 px-2 py-1.5 text-left',
                                 idx === mentionActiveIndex
-                                  ? 'bg-accent text-accent-foreground'
-                                  : 'hover:bg-accent/50',
+                                  ? 'bg-accent text-accent-foreground hover:bg-accent'
+                                  : 'hover:bg-accent/50 hover:text-foreground',
                               )}
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => applyMentionSuggestion(item.fullPath)}
+                              variant="ghost"
+                              size="sm"
                             >
                               {item.iconUrl ? (
                                 <img
@@ -2028,7 +2386,7 @@ export function ProjectChat({
                                   {item.relativePath}
                                 </span>
                               </span>
-                            </button>
+                            </Button>
                           ))}
                         </div>
                       ) : (
@@ -2037,9 +2395,9 @@ export function ProjectChat({
                     </div>
                   </div>
                 ) : null}
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   {activeOpenFileBadge ? (
-                    <div className="flex flex-wrap gap-2 px-1">
+                    <div className="flex flex-wrap gap-1.5 px-1">
                       <Badge
                         variant="secondary"
                         className={cn(
@@ -2060,24 +2418,30 @@ export function ProjectChat({
                         <span className="min-w-0 truncate">
                           当前文件：{activeOpenFileBadge.filePath}
                         </span>
-                        <button
+                        <Button
                           type="button"
-                          className="ml-auto inline-flex rounded-sm p-1 text-muted-foreground hover:bg-background/60 hover:text-foreground"
+                          variant="ghost"
+                          size="icon-sm"
+                          className="ml-auto size-6 rounded-sm text-muted-foreground hover:bg-background/60 hover:text-foreground"
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => setIncludeActiveFileInPrompt((prev) => !prev)}
                           title={includeActiveFileInPrompt ? '点击后不加入提示词' : '点击后加入提示词'}
+                          aria-label={
+                            includeActiveFileInPrompt ? '点击后不加入提示词' : '点击后加入提示词'
+                          }
+                          aria-pressed={includeActiveFileInPrompt}
                         >
                           {includeActiveFileInPrompt ? (
                             <Eye className="size-3" />
                           ) : (
                             <EyeOff className="size-3" />
                           )}
-                        </button>
+                        </Button>
                       </Badge>
                     </div>
                   ) : null}
                   {mentionedFiles.length ? (
-                    <div className="flex flex-wrap gap-2 px-1">
+                    <div className="flex flex-wrap gap-1.5 px-1">
                       {mentionedFiles.map((file) => (
                         <Badge
                           key={file.fullPath}
@@ -2095,20 +2459,23 @@ export function ProjectChat({
                             />
                           ) : null}
                           <span className="min-w-0 truncate">{file.relativePath}</span>
-                          <button
+                          <Button
                             type="button"
-                            className="ml-auto inline-flex rounded-sm p-1 text-muted-foreground hover:bg-background/60 hover:text-foreground"
+                            variant="ghost"
+                            size="icon-sm"
+                            className="ml-auto size-6 rounded-sm text-muted-foreground hover:bg-background/60 hover:text-foreground"
                             onClick={() => removeMentionedFile(file.fullPath)}
                             title="移除引用文件"
+                            aria-label="移除引用文件"
                           >
                             <X className="size-3" />
-                          </button>
+                          </Button>
                         </Badge>
                       ))}
                     </div>
                   ) : null}
                   {codeSelectionBadge ? (
-                    <div className="flex flex-wrap gap-2 px-1">
+                    <div className="flex flex-wrap gap-1.5 px-1">
                       <Badge variant="secondary" className="max-w-full min-w-0 gap-2 pr-1">
                         {codeSelectionBadge.iconUrl ? (
                           <img
@@ -2123,25 +2490,28 @@ export function ProjectChat({
                           {codeSelectionBadge.filePath} {codeSelectionBadge.lineLabel}
                         </span>
                         {onClearCodeSelection ? (
-                          <button
+                          <Button
                             type="button"
-                            className="ml-auto inline-flex rounded-sm p-1 text-muted-foreground hover:bg-background/60 hover:text-foreground"
+                            variant="ghost"
+                            size="icon-sm"
+                            className="ml-auto size-6 rounded-sm text-muted-foreground hover:bg-background/60 hover:text-foreground"
                             onClick={onClearCodeSelection}
                             title="移除选中代码"
+                            aria-label="移除选中代码"
                           >
                             <X className="size-3" />
-                          </button>
+                          </Button>
                         ) : null}
                       </Badge>
                     </div>
                   ) : null}
                   {draftImages.length ? (
-                    <div className="flex flex-wrap gap-2 px-1">
+                    <div className="flex flex-wrap gap-1.5 px-1">
                       {draftImages.map((img) => (
                         <div
                           key={img.clientId}
                           className={cn(
-                            'relative size-16 overflow-hidden rounded-md border bg-background/30',
+                            'relative size-14 overflow-hidden rounded-md border bg-background/30',
                             img.status === 'error' ? 'border-destructive' : '',
                           )}
                         >
@@ -2154,17 +2524,20 @@ export function ProjectChat({
                             />
                           ) : null}
 
-                          <button
+                          <Button
                             type="button"
+                            variant="ghost"
+                            size="icon-sm"
                             className={cn(
-                              'absolute right-1 top-1 rounded-sm bg-background/70 p-1 text-muted-foreground',
+                              'absolute right-1 top-1 size-6 rounded-sm bg-background/70 text-muted-foreground',
                               'hover:bg-background hover:text-foreground',
                             )}
                             onClick={() => removeDraftImage(img.clientId)}
                             title="移除"
+                            aria-label="移除"
                           >
                             <X className="size-3" />
-                          </button>
+                          </Button>
 
                           {img.status === 'uploading' ? (
                             <div className="absolute inset-0 flex items-center justify-center bg-background/70">
@@ -2182,7 +2555,7 @@ export function ProjectChat({
                     </div>
                   ) : null}
 
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <input
                       ref={fileInputRef}
                       type="file"
@@ -2199,7 +2572,7 @@ export function ProjectChat({
 
                     <textarea
                       ref={textareaRef}
-                      className="min-h-[40px] max-h-[160px] w-full resize-none rounded-xl bg-background px-3 py-1.5 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2"
+                      className="min-h-[36px] max-h-[120px] w-full resize-none rounded-lg bg-background px-3 py-1.5 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2"
                       placeholder="输入消息，Enter 发送，Shift+Enter 换行"
                       value={draft}
                       disabled={sending}
@@ -2287,49 +2660,202 @@ export function ProjectChat({
                         <span className="sr-only">上传图片</span>
                       </Button>
 
-                      {project.toolType === 'Codex' ? (
-                        <Select
-                          value={modelOverride.trim() ? modelOverride.trim() : modelDefaultSentinel}
-                          disabled={sending}
-                          onValueChange={(value) => {
-                            if (value === addModelSentinel) {
-                              openAddModelDialog()
-                              return
-                            }
-
-                            if (value === modelDefaultSentinel) {
-                              setModelOverride('')
-                              return
-                            }
-
-                            setModelOverride(value)
-                          }}
-                        >
-                          <SelectTrigger
-                            className="h-8 w-[180px] shrink-0 px-2 text-xs"
+                      <Popover
+                        open={modelPickerOpen}
+                        onOpenChange={(open) => {
+                          setModelPickerOpen(open)
+                          if (open) setModelPickerQuery('')
+                        }}
+                      >
+                        <PopoverTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={sending}
+                            className="h-8 w-[160px] shrink-0 justify-between gap-2 px-2 text-xs"
                             title="选择模型"
                           >
-                            <SelectValue placeholder="选择模型" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value={modelDefaultSentinel}>
-                              项目默认{project.model ? ` (${project.model})` : ''}
-                            </SelectItem>
-                            {availableModels.length ? (
-                              <>
-                                <SelectSeparator />
-                                {availableModels.map((m) => (
-                                  <SelectItem key={m} value={m}>
-                                    {m}
-                                  </SelectItem>
-                                ))}
-                              </>
-                            ) : null}
-                            <SelectSeparator />
-                            <SelectItem value={addModelSentinel}>+ 添加模型…</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      ) : null}
+                            <span className="min-w-0 flex-1 truncate">
+                              {!modelSelection
+                                ? `项目默认${project.model ? ` (${project.model})` : ''}`
+                                : `${activeProvider?.name ?? '提供商'}: ${modelSelection.model}`}
+                            </span>
+                            <ChevronDown className="size-4 opacity-50" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                          align="start"
+                          className="w-[320px] max-w-[calc(100vw-2rem)] p-0"
+                        >
+                          <div className="p-2">
+                            <Input
+                              ref={modelPickerSearchRef}
+                              value={modelPickerQuery}
+                              onChange={(e) => setModelPickerQuery(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key !== 'Enter') return
+                                if (!modelPickerQueryKey) return
+
+                                const first = modelPickerProviderGroups[0] ?? null
+                                const firstModel = first?.models[0] ?? first?.customModels[0] ?? null
+                                if (!first || !firstModel) return
+
+                                e.preventDefault()
+                                setModelSelection({ providerId: first.provider.id, model: firstModel })
+                                setModelPickerOpen(false)
+                              }}
+                              placeholder="搜索模型或提供商…"
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                          <Separator />
+                          <div className="max-h-[260px] overflow-auto p-1">
+                            <button
+                              type="button"
+                              className={cn(
+                                "hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-xs outline-none transition-colors",
+                                !modelSelection && "bg-accent text-accent-foreground",
+                              )}
+                              onClick={() => {
+                                setModelSelection(null)
+                                setModelPickerOpen(false)
+                              }}
+                            >
+                              <span className="min-w-0 flex-1 truncate">
+                                项目默认{project.model ? ` (${project.model})` : ''}
+                              </span>
+                              {!modelSelection ? <Check className="size-4 opacity-70" /> : null}
+                            </button>
+
+                            {providersLoaded ? (
+                              providers.length ? (
+                                modelPickerProviderGroups.length ? (
+                                  <div className="space-y-2 pt-1">
+                                    {modelPickerProviderGroups.map((g, idx) => {
+                                      return (
+                                        <div key={g.provider.id} className="space-y-1">
+                                          <div className="px-2 py-1 text-[11px] font-medium text-muted-foreground">
+                                            {g.provider.name}
+                                          </div>
+
+                                          {g.models.length
+                                            ? g.models.map((m) => {
+                                              const selected =
+                                                modelSelection?.providerId === g.provider.id &&
+                                                modelSelection.model === m
+                                              return (
+                                                <button
+                                                  key={`${g.provider.id}:${m}`}
+                                                  type="button"
+                                                  className={cn(
+                                                    "hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-xs outline-none transition-colors",
+                                                    selected && "bg-accent text-accent-foreground",
+                                                  )}
+                                                  onClick={() => {
+                                                    setModelSelection({
+                                                      providerId: g.provider.id,
+                                                      model: m,
+                                                    })
+                                                    setModelPickerOpen(false)
+                                                  }}
+                                                >
+                                                  <span className="min-w-0 flex-1 truncate">
+                                                    {m}
+                                                  </span>
+                                                  {selected ? (
+                                                    <Check className="size-4 opacity-70" />
+                                                  ) : null}
+                                                </button>
+                                              )
+                                            })
+                                            : null}
+
+                                          {!g.models.length &&
+                                            !g.customModels.length &&
+                                            g.provider.models.length === 0 ? (
+                                            <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                                              未缓存模型（可在“提供商管理”中拉取更新）
+                                            </div>
+                                          ) : null}
+
+                                          {g.customModels.length ? (
+                                            <div className="pt-1">
+                                              <div className="px-2 py-1 text-[11px] font-medium text-muted-foreground">
+                                                自定义
+                                              </div>
+                                              {g.customModels.map((m) => {
+                                                const selected =
+                                                  modelSelection?.providerId === g.provider.id &&
+                                                  modelSelection.model === m
+                                                return (
+                                                  <button
+                                                    key={`${g.provider.id}:custom:${m}`}
+                                                    type="button"
+                                                    className={cn(
+                                                      "hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-xs outline-none transition-colors",
+                                                      selected && "bg-accent text-accent-foreground",
+                                                    )}
+                                                    onClick={() => {
+                                                      setModelSelection({
+                                                        providerId: g.provider.id,
+                                                        model: m,
+                                                      })
+                                                      setModelPickerOpen(false)
+                                                    }}
+                                                  >
+                                                    <span className="min-w-0 flex-1 truncate">
+                                                      {m}
+                                                    </span>
+                                                    {selected ? (
+                                                      <Check className="size-4 opacity-70" />
+                                                    ) : null}
+                                                  </button>
+                                                )
+                                              })}
+                                            </div>
+                                          ) : null}
+
+                                          {idx < modelPickerProviderGroups.length - 1 ? (
+                                            <Separator className="my-1" />
+                                          ) : null}
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
+                                ) : (
+                                  <div className="px-2 py-2 text-xs text-muted-foreground">
+                                    未找到匹配模型
+                                  </div>
+                                )
+                              ) : (
+                                <div className="px-2 py-2 text-xs text-muted-foreground">
+                                  未配置提供商
+                                </div>
+                              )
+                            ) : (
+                              <div className="px-2 py-2 text-xs text-muted-foreground">
+                                <span className="inline-flex items-center gap-2">
+                                  <Spinner className="size-3" /> 加载提供商模型中…
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                          <Separator />
+                          <div className="p-1">
+                            <button
+                              type="button"
+                              className="hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground w-full rounded-sm px-2 py-1.5 text-left text-xs outline-none transition-colors"
+                              onClick={() => {
+                                setModelPickerOpen(false)
+                                openAddModelDialog()
+                              }}
+                            >
+                              + 添加模型…
+                            </button>
+                          </div>
+                        </PopoverContent>
+                      </Popover>
 
                       <div className="ml-auto flex items-center gap-2">
                         {sending ? (
@@ -2350,7 +2876,7 @@ export function ProjectChat({
                             disabled={
                               (!draft.trim() &&
                                 draftImages.filter((img) => img.status === 'ready').length ===
-                                  0) ||
+                                0) ||
                               draftImages.some((img) => img.status !== 'ready')
                             }
                           >
@@ -2371,6 +2897,7 @@ export function ProjectChat({
           title="添加模型"
           onClose={() => {
             setAddModelOpen(false)
+            setAddModelProviderId('')
             setAddModelDraft('')
             setAddModelError(null)
           }}
@@ -2379,6 +2906,32 @@ export function ProjectChat({
           <div className="space-y-3">
             <div className="text-sm text-muted-foreground">
               请输入模型名称（例如：gpt-5.1-codex-max）。
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-muted-foreground">提供商</div>
+              <Select
+                value={addModelProviderId}
+                disabled={sending}
+                onValueChange={(value) => {
+                  setAddModelProviderId(value)
+                  if (addModelError) setAddModelError(null)
+                }}
+              >
+                <SelectTrigger className="h-9">
+                  <SelectValue placeholder={providersLoaded ? '选择提供商' : '加载中…'} />
+                </SelectTrigger>
+                <SelectContent>
+                  {providers.length ? (
+                    providers.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name}
+                      </SelectItem>
+                    ))
+                  ) : (
+                    <div className="px-2 py-2 text-xs text-muted-foreground">未配置提供商</div>
+                  )}
+                </SelectContent>
+              </Select>
             </div>
             <Input
               autoFocus
@@ -2396,6 +2949,7 @@ export function ProjectChat({
                 variant="outline"
                 onClick={() => {
                   setAddModelOpen(false)
+                  setAddModelProviderId('')
                   setAddModelDraft('')
                   setAddModelError(null)
                 }}
@@ -2405,6 +2959,18 @@ export function ProjectChat({
               <Button
                 type="button"
                 onClick={() => {
+                  const providerId = addModelProviderId.trim()
+                  if (!providerId) {
+                    setAddModelError('请选择提供商')
+                    return
+                  }
+
+                  const provider = providers.find((p) => p.id === providerId) ?? null
+                  if (!provider) {
+                    setAddModelError('提供商不存在或已被删除')
+                    return
+                  }
+
                   const model = addModelDraft.trim()
                   if (!model) {
                     setAddModelError('请输入模型名称')
@@ -2417,22 +2983,54 @@ export function ProjectChat({
                   }
 
                   const lower = model.toLowerCase()
-                  const providerHas = providerModelOptions.some((m) => m.toLowerCase() === lower)
-                  const customHas = customModels.some((m) => m.toLowerCase() === lower)
+                  const providerHas = provider.models.some((m) => m.toLowerCase() === lower)
+
+                  const customKey = `onecode:chat:custom-models:v1:${project.toolType}:${providerId}`
+                  const existingCustomModels =
+                    providerId === activeProviderId
+                      ? customModels
+                      : (() => {
+                        if (typeof window === 'undefined') return []
+                        try {
+                          const raw = window.localStorage.getItem(customKey)
+                          if (!raw) return []
+                          const parsed = JSON.parse(raw) as unknown
+                          if (!Array.isArray(parsed)) return []
+                          return parsed
+                            .filter((m): m is string => typeof m === 'string')
+                            .map((m) => m.trim())
+                            .filter(Boolean)
+                        } catch {
+                          return []
+                        }
+                      })()
+
+                  const customHas = existingCustomModels.some((m) => m.toLowerCase() === lower)
 
                   if (!providerHas && !customHas) {
                     const map = new Map<string, string>()
-                    for (const existing of customModels) {
+                    for (const existing of existingCustomModels) {
                       const normalized = existing.trim()
                       if (!normalized) continue
                       map.set(normalized.toLowerCase(), normalized)
                     }
                     map.set(lower, model)
-                    persistCustomModels(Array.from(map.values()))
+                    const nextModels = Array.from(map.values())
+
+                    if (providerId === activeProviderId) {
+                      persistCustomModels(nextModels)
+                    } else if (typeof window !== 'undefined') {
+                      try {
+                        window.localStorage.setItem(customKey, JSON.stringify(nextModels))
+                      } catch {
+                        // ignore
+                      }
+                    }
                   }
 
-                  setModelOverride(model)
+                  setModelSelection({ providerId, model })
                   setAddModelOpen(false)
+                  setAddModelProviderId('')
                   setAddModelDraft('')
                   setAddModelError(null)
                 }}
@@ -2445,71 +3043,71 @@ export function ProjectChat({
 
         {detailsOpen && detailsPortalTarget
           ? createPortal(
-              <div className="min-h-0 flex-1 overflow-y-auto">
-                <div className="px-3 py-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        disabled={!toolOutput}
-                        onClick={() => setToolOutput('')}
-                      >
-                        清空输出
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        disabled={!rawEvents.length}
-                        onClick={() => setRawEvents([])}
-                      >
-                        清空事件
-                      </Button>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="px-3 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={!toolOutput}
+                      onClick={() => setToolOutput('')}
+                    >
+                      清空输出
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={!rawEvents.length}
+                      onClick={() => setRawEvents([])}
+                    >
+                      清空事件
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="mt-3 space-y-4">
+                  <div>
+                    <div className="text-xs font-medium text-muted-foreground">
+                      Tool Output
                     </div>
+                    {toolOutput ? (
+                      <pre className="mt-2 max-h-[260px] overflow-auto whitespace-pre-wrap break-words rounded-md border bg-background p-2 text-[11px]">
+                        {toolOutput}
+                      </pre>
+                    ) : (
+                      <div className="mt-2 text-xs text-muted-foreground">（无）</div>
+                    )}
                   </div>
 
-                  <div className="mt-3 space-y-4">
-                    <div>
-                      <div className="text-xs font-medium text-muted-foreground">
-                        Tool Output
-                      </div>
-                      {toolOutput ? (
-                        <pre className="mt-2 max-h-[260px] overflow-auto whitespace-pre-wrap break-words rounded-md border bg-background p-2 text-[11px]">
-                          {toolOutput}
-                        </pre>
-                      ) : (
-                        <div className="mt-2 text-xs text-muted-foreground">（无）</div>
-                      )}
+                  <div>
+                    <div className="text-xs font-medium text-muted-foreground">
+                      Raw Events
                     </div>
-
-                    <div>
-                      <div className="text-xs font-medium text-muted-foreground">
-                        Raw Events
-                      </div>
-                      <div className="mt-2 space-y-2">
-                        {rawEvents.length ? null : (
-                          <div className="text-xs text-muted-foreground">（无）</div>
-                        )}
-                        {rawEvents.map((e, idx) => (
-                          <div
-                            key={`${e.receivedAtUtc}-${idx}`}
-                            className="rounded-md border bg-background p-2"
-                          >
-                            <div className="truncate text-[11px] text-muted-foreground">
-                              {e.receivedAtUtc} {e.method ?? ''}
-                            </div>
-                            <pre className="mt-1 max-h-[160px] overflow-auto whitespace-pre-wrap text-[11px]">
-                              {e.raw}
-                            </pre>
+                    <div className="mt-2 space-y-2">
+                      {rawEvents.length ? null : (
+                        <div className="text-xs text-muted-foreground">（无）</div>
+                      )}
+                      {rawEvents.map((e, idx) => (
+                        <div
+                          key={`${e.receivedAtUtc}-${idx}`}
+                          className="rounded-md border bg-background p-2"
+                        >
+                          <div className="truncate text-[11px] text-muted-foreground">
+                            {e.receivedAtUtc} {e.method ?? ''}
                           </div>
-                        ))}
-                      </div>
+                          <pre className="mt-1 max-h-[160px] overflow-auto whitespace-pre-wrap text-[11px]">
+                            {e.raw}
+                          </pre>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </div>
-              </div>,
-              detailsPortalTarget,
-            )
+              </div>
+            </div>,
+            detailsPortalTarget,
+          )
           : null}
       </>
     </TooltipProvider>

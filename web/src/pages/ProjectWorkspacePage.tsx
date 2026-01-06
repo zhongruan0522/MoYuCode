@@ -125,6 +125,7 @@ export type ProjectWorkspaceHandle = {
 
 type ProjectWorkspacePageProps = {
   projectId?: string
+  currentToolType?: 'Codex' | 'ClaudeCode' | null
 }
 
 function formatDurationMs(durationMs: number): string {
@@ -495,7 +496,7 @@ function ProjectSummaryPanel({ project }: { project: ProjectDto }) {
 }
 
 export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWorkspacePageProps>(
-  function ProjectWorkspacePage({ projectId }: ProjectWorkspacePageProps, ref) {
+  function ProjectWorkspacePage({ projectId, currentToolType }: ProjectWorkspacePageProps, ref) {
   const { id: routeId } = useParams()
   const [searchParams] = useSearchParams()
   const id =
@@ -1496,6 +1497,7 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
               activeFilePath={activeView.kind === 'file' ? activeView.path : null}
               codeSelection={codeSelection}
               onClearCodeSelection={() => setCodeSelection(null)}
+              currentToolType={currentToolType}
             />
           ) : (
             <div className="min-h-0 flex-1 overflow-hidden p-4 text-sm text-muted-foreground">
