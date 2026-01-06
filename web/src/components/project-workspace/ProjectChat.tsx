@@ -16,6 +16,8 @@ import type { CodeSelection, WorkspaceFileRef } from '@/lib/chatPromptXml'
 import { buildUserPromptWithWorkspaceContext } from '@/lib/chatWorkspaceContextXml'
 import { cn } from '@/lib/utils'
 import { getVscodeFileIconUrl } from '@/lib/vscodeFileIcons'
+import { DiffViewer } from '@/components/DiffViewer'
+import { MonacoCode } from '@/components/MonacoCode'
 import { Modal } from '@/components/Modal'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -267,9 +269,23 @@ function readPartsText(parts: unknown[] | undefined): string {
   if (!parts?.length) return ''
   const chunks: string[] = []
   for (const part of parts) {
-    if (!part || typeof part !== 'object') continue
-    const p = part as { text?: unknown }
-    if (typeof p.text === 'string' && p.text) chunks.push(p.text)
+    if (!part) continue
+    if (typeof part === 'string') {
+      if (part) chunks.push(part)
+      continue
+    }
+    if (typeof part !== 'object') continue
+
+    const p = part as { text?: unknown; data?: unknown }
+    if (typeof p.text === 'string' && p.text) {
+      chunks.push(p.text)
+      continue
+    }
+
+    if (p.data && typeof p.data === 'object') {
+      const dataObj = p.data as { text?: unknown }
+      if (typeof dataObj.text === 'string' && dataObj.text) chunks.push(dataObj.text)
+    }
   }
   return chunks.join('')
 }
@@ -278,6 +294,113 @@ function truncateInlineText(value: string, maxChars = 140): string {
   const normalized = (value ?? '').replace(/\s+/g, ' ').trim()
   if (normalized.length <= maxChars) return normalized
   return normalized.slice(0, Math.max(0, maxChars - 1)) + '…'
+}
+
+function normalizeNewlines(value: string): string {
+  return (value ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+}
+
+function tryParseJsonRecord(value: string): Record<string, unknown> | null {
+  const raw = (value ?? '').trim()
+  if (!raw) return null
+  if (!raw.startsWith('{')) return null
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    return parsed as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+function readFirstString(obj: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = obj[key]
+    if (typeof value === 'string') return value
+  }
+  return null
+}
+
+function readFirstNonEmptyString(obj: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = obj[key]
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      if (trimmed) return trimmed
+    }
+  }
+  return null
+}
+
+function normalizeToolNameKey(toolName: string): string {
+  return (toolName ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
+function isWriteToolName(toolName: string): boolean {
+  const key = normalizeToolNameKey(toolName)
+  return key === 'write' || key.endsWith('write') || key.includes('mcpclaudewrite')
+}
+
+function isEditToolName(toolName: string): boolean {
+  const key = normalizeToolNameKey(toolName)
+  return key === 'edit' || key.endsWith('edit') || key.includes('mcpclaudeedit')
+}
+
+function shouldAutoOpenClaudeTool(toolName: string): boolean {
+  return isWriteToolName(toolName) || isEditToolName(toolName)
+}
+
+function tryParseWriteToolInput(input: string): { filePath: string; content: string } | null {
+  const obj = tryParseJsonRecord(input)
+  if (!obj) return null
+
+  const filePath =
+    readFirstNonEmptyString(obj, ['file_path', 'filePath', 'path']) ??
+    readFirstNonEmptyString(obj, ['file', 'target', 'targetPath'])
+
+  const content = readFirstString(obj, ['content', 'text'])
+
+  if (!filePath) return null
+  if (content == null) return null
+  return { filePath, content }
+}
+
+function tryParseEditToolInput(input: string): {
+  filePath: string
+  oldString: string
+  newString: string
+  replaceAll: boolean
+} | null {
+  const obj = tryParseJsonRecord(input)
+  if (!obj) return null
+
+  const filePath =
+    readFirstNonEmptyString(obj, ['file_path', 'filePath', 'path']) ??
+    readFirstNonEmptyString(obj, ['file', 'target', 'targetPath'])
+
+  const oldString = readFirstString(obj, ['old_string', 'oldString'])
+  const newString = readFirstString(obj, ['new_string', 'newString'])
+  const replaceAll = obj.replace_all === true || obj.replaceAll === true
+
+  if (!filePath) return null
+  if (oldString == null || newString == null) return null
+  return { filePath, oldString, newString, replaceAll }
+}
+
+function buildReplacementDiff(filePath: string, oldString: string, newString: string): string {
+  const path = (filePath ?? '').replace(/\\/g, '/')
+  const oldLines = normalizeNewlines(oldString).split('\n')
+  const newLines = normalizeNewlines(newString).split('\n')
+
+  const oldCount = Math.max(1, oldLines.length)
+  const newCount = Math.max(1, newLines.length)
+
+  const hunk = `@@ -1,${oldCount} +1,${newCount} @@`
+
+  const oldBlock = oldLines.map((line) => `-${line}`).join('\n')
+  const newBlock = newLines.map((line) => `+${line}`).join('\n')
+
+  return `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n${hunk}\n${oldBlock}\n${newBlock}`
 }
 
 type MentionToken = {
@@ -881,7 +1004,22 @@ const ChatClaudeToolMessage = memo(function ChatClaudeToolMessage({
   const output = message.toolOutput ?? ''
   const isError = Boolean(message.toolIsError)
 
-  const inputPreview = input ? truncateInlineText(input, 120) : ''
+  const writeInput = useMemo(
+    () => (isWriteToolName(toolName) ? tryParseWriteToolInput(input) : null),
+    [input, toolName],
+  )
+  const editInput = useMemo(
+    () => (isEditToolName(toolName) ? tryParseEditToolInput(input) : null),
+    [input, toolName],
+  )
+
+  const inputPreview = writeInput?.filePath
+    ? `File: ${truncateInlineText(writeInput.filePath, 120)}`
+    : editInput?.filePath
+      ? `File: ${truncateInlineText(editInput.filePath, 120)}`
+      : input
+        ? truncateInlineText(input, 120)
+        : ''
   const outputPreview = output ? truncateInlineText(output, 120) : ''
 
   return (
@@ -933,7 +1071,34 @@ const ChatClaudeToolMessage = memo(function ChatClaudeToolMessage({
 
         {open ? (
           <div id={`claude-tool-${message.id}`} className="px-3 pb-3 text-xs space-y-2">
-            {input ? (
+            {writeInput ? (
+              <div className="space-y-2">
+                <div className="text-[11px] font-medium text-muted-foreground">Write</div>
+                <div className="break-all text-[11px] text-muted-foreground">{writeInput.filePath}</div>
+                <div className="h-[240px] overflow-hidden rounded-md border bg-background">
+                  <MonacoCode code={writeInput.content} filePath={writeInput.filePath} className="h-full" />
+                </div>
+              </div>
+            ) : editInput ? (
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-[11px] font-medium text-muted-foreground">Edit</div>
+                  {editInput.replaceAll ? (
+                    <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                      replace_all
+                    </Badge>
+                  ) : null}
+                </div>
+                <div className="break-all text-[11px] text-muted-foreground">{editInput.filePath}</div>
+                <div className="h-[240px] overflow-hidden rounded-md border bg-background">
+                  <DiffViewer
+                    diff={buildReplacementDiff(editInput.filePath, editInput.oldString, editInput.newString)}
+                    viewMode="unified"
+                    className="h-full"
+                  />
+                </div>
+              </div>
+            ) : input ? (
               <div>
                 <div className="text-[11px] font-medium text-muted-foreground">Input</div>
                 <pre className="mt-1 whitespace-pre-wrap break-words">{input}</pre>
@@ -967,6 +1132,7 @@ const ChatTextMessage = memo(function ChatTextMessage({
   tokenUsage?: TokenUsageArtifact
 }) {
   const showBubble = Boolean(message.text) || (message.role === 'agent' && isActiveAgentMessage)
+  if (!showBubble && !message.images?.length && !tokenUsage) return null
 
   return (
     <ChatMessageRow align={align}>
@@ -1135,6 +1301,21 @@ function insertBeforeMessage(
   const next = [...prev]
   if (insertIndex >= 0) {
     next.splice(insertIndex, 0, message)
+  } else {
+    next.push(message)
+  }
+  return next
+}
+
+function insertAfterMessage(
+  prev: ChatMessage[],
+  anchorMessageId: string,
+  message: ChatMessage,
+): ChatMessage[] {
+  const insertIndex = prev.findIndex((m) => m.id === anchorMessageId)
+  const next = [...prev]
+  if (insertIndex >= 0) {
+    next.splice(insertIndex + 1, 0, message)
   } else {
     next.push(message)
   }
@@ -1862,12 +2043,21 @@ export function ProjectChat({
     const taskId = randomId('task')
     const userMessageId = `msg-user-${taskId}`
     const agentMessageId = `msg-agent-${taskId}`
+    const toolOutputMessageId = `msg-tool-output-${taskId}`
     const thinkMessageIdPrefix = `msg-think-${taskId}-`
     let thinkSegmentIndex = 0
     let activeThinkMessageId: string | null = null
     const seenToolCalls = new Set<string>()
     const toolMessageIdByUseId = new Map<string, string>()
+    const toolNameByUseId = new Map<string, string>()
+    const seenClaudeToolResultChunks = new Set<string>()
     let sawFinal = false
+    const isClaude = project.toolType === 'ClaudeCode'
+    let activeAgentTextMessageId = agentMessageId
+    let agentTextSegmentIndex = 1
+    let sawAnyAgentText = false
+    let toolChainTailMessageId: string | null = null
+    let startNewTextSegmentAfterTools = false
 
     setMessages((prev) => [
       ...prev,
@@ -1980,10 +2170,83 @@ export function ProjectChat({
 
           if (messageId === agentMessageId && chunk) {
             setActiveReasoningMessageId(null)
-            if (statusUpdate.final) {
-              updateMessageText(agentMessageId, () => chunk)
+            if (isClaude) {
+              if (statusUpdate.final) {
+                if (!sawAnyAgentText) {
+                  if (startNewTextSegmentAfterTools && toolChainTailMessageId) {
+                    agentTextSegmentIndex += 1
+                    const nextTextId = `${agentMessageId}-seg-${agentTextSegmentIndex}`
+                    const insertAfterId = toolChainTailMessageId
+
+                    activeAgentTextMessageId = nextTextId
+                    sawAnyAgentText = true
+                    startNewTextSegmentAfterTools = false
+                    toolChainTailMessageId = null
+
+                    const toolMessage: ChatMessage = {
+                      id: nextTextId,
+                      role: 'agent',
+                      kind: 'text',
+                      text: chunk,
+                    }
+
+                    setMessages((prev) => {
+                      const existingIndex = prev.findIndex((m) => m.id === nextTextId)
+                      if (existingIndex >= 0) {
+                        const next = [...prev]
+                        const existing = next[existingIndex]
+                        next[existingIndex] = { ...existing, text: existing.text + chunk }
+                        return next
+                      }
+
+                      return insertAfterMessage(prev, insertAfterId, toolMessage)
+                    })
+                  } else {
+                    updateMessageText(activeAgentTextMessageId, () => chunk)
+                    sawAnyAgentText = true
+                  }
+                }
+              } else if (startNewTextSegmentAfterTools && toolChainTailMessageId) {
+                agentTextSegmentIndex += 1
+                const nextTextId = `${agentMessageId}-seg-${agentTextSegmentIndex}`
+                const insertAfterId = toolChainTailMessageId
+
+                activeAgentTextMessageId = nextTextId
+                sawAnyAgentText = true
+                startNewTextSegmentAfterTools = false
+                toolChainTailMessageId = null
+
+                const toolMessage: ChatMessage = {
+                  id: nextTextId,
+                  role: 'agent',
+                  kind: 'text',
+                  text: chunk,
+                }
+
+                setMessages((prev) => {
+                  const existingIndex = prev.findIndex((m) => m.id === nextTextId)
+                  if (existingIndex >= 0) {
+                    const next = [...prev]
+                    const existing = next[existingIndex]
+                    next[existingIndex] = { ...existing, text: existing.text + chunk }
+                    return next
+                  }
+
+                  return insertAfterMessage(prev, insertAfterId, toolMessage)
+                })
+              } else {
+                updateMessageText(activeAgentTextMessageId, (prev) => prev + chunk)
+                sawAnyAgentText = true
+                if (toolChainTailMessageId) {
+                  toolChainTailMessageId = null
+                }
+              }
             } else {
-              updateMessageText(agentMessageId, (prev) => prev + chunk)
+              if (statusUpdate.final) {
+                updateMessageText(agentMessageId, () => chunk)
+              } else {
+                updateMessageText(agentMessageId, (prev) => prev + chunk)
+              }
             }
           }
         }
@@ -2006,6 +2269,41 @@ export function ProjectChat({
           if (chunk) {
             setToolOutput((prev) => prev + chunk)
             onToolOutput?.(chunk)
+
+            setToolOpenById((prev) =>
+              prev[toolOutputMessageId] !== undefined ? prev : { ...prev, [toolOutputMessageId]: true },
+            )
+
+            setMessages((prev) => {
+              const existingIndex = prev.findIndex((m) => m.id === toolOutputMessageId)
+              if (existingIndex >= 0) {
+                const next = [...prev]
+                const existing = next[existingIndex]
+                next[existingIndex] = {
+                  ...existing,
+                  kind: 'tool',
+                  role: 'agent',
+                  toolName: existing.toolName ?? 'Tool Output',
+                  toolInput: existing.toolInput ?? '',
+                  toolOutput: (existing.toolOutput ?? '') + chunk,
+                  text: existing.text + chunk,
+                }
+                return next
+              }
+
+              const toolMessage: ChatMessage = {
+                id: toolOutputMessageId,
+                role: 'agent',
+                kind: 'tool',
+                toolName: 'Tool Output',
+                toolInput: '',
+                toolOutput: chunk,
+                text: chunk,
+              }
+
+              const anchorAfterId = toolChainTailMessageId ?? activeAgentTextMessageId
+              return insertAfterMessage(prev, anchorAfterId, toolMessage)
+            })
           }
           continue
         }
@@ -2036,9 +2334,10 @@ export function ProjectChat({
             const dataValue = (part as { data?: unknown }).data
             const normalized = normalizeTokenUsageArtifact(dataValue)
             if (!normalized) continue
+            const tokenMessageId = isClaude ? activeAgentTextMessageId : agentMessageId
             setTokenByMessageId((prev) => ({
               ...prev,
-              [agentMessageId]: normalized,
+              [tokenMessageId]: normalized,
             }))
             break
           }
@@ -2090,18 +2389,30 @@ export function ProjectChat({
 
             if (kind === 'tool_use') {
               const toolMessageId = ensureToolMessageId()
+              const resolvedToolName = toolName ?? 'tool'
+              toolNameByUseId.set(toolUseId, resolvedToolName)
               const toolMessage: ChatMessage = {
                 id: toolMessageId,
                 role: 'agent',
                 kind: 'tool',
-                toolName: toolName ?? 'tool',
+                toolName: resolvedToolName,
                 toolUseId,
                 toolInput: input,
                 text: input,
               }
 
+              const anchorAfterId = toolChainTailMessageId ?? activeAgentTextMessageId
+
+              if (!toolChainTailMessageId) {
+                startNewTextSegmentAfterTools = true
+              }
+
+              toolChainTailMessageId = toolMessageId
+
               setToolOpenById((prev) =>
-                prev[toolMessageId] !== undefined ? prev : { ...prev, [toolMessageId]: false },
+                prev[toolMessageId] !== undefined
+                  ? prev
+                  : { ...prev, [toolMessageId]: shouldAutoOpenClaudeTool(resolvedToolName) },
               )
 
               setMessages((prev) => {
@@ -2119,7 +2430,7 @@ export function ProjectChat({
                   return next
                 }
 
-                return insertBeforeMessage(prev, agentMessageId, toolMessage)
+                return insertAfterMessage(prev, anchorAfterId, toolMessage)
               })
 
               activeThinkMessageId = null
@@ -2129,8 +2440,17 @@ export function ProjectChat({
 
             if (kind === 'tool_result') {
               const toolMessageId = ensureToolMessageId()
+              const resolvedToolName = toolName ?? toolNameByUseId.get(toolUseId) ?? 'tool'
+              const anchorAfterId = toolChainTailMessageId ?? activeAgentTextMessageId
+              if (!toolChainTailMessageId) {
+                startNewTextSegmentAfterTools = true
+              }
+              toolChainTailMessageId = toolMessageId
+
               setToolOpenById((prev) =>
-                prev[toolMessageId] !== undefined ? prev : { ...prev, [toolMessageId]: false },
+                prev[toolMessageId] !== undefined
+                  ? prev
+                  : { ...prev, [toolMessageId]: shouldAutoOpenClaudeTool(resolvedToolName) },
               )
 
               setMessages((prev) => {
@@ -2156,15 +2476,29 @@ export function ProjectChat({
                   id: toolMessageId,
                   role: 'agent',
                   kind: 'tool',
-                  toolName: toolName ?? 'tool',
+                  toolName: resolvedToolName,
                   toolUseId,
                   toolOutput: output,
                   toolIsError: isError,
                   text: '',
                 }
 
-                return insertBeforeMessage(prev, agentMessageId, toolMessage)
+                return insertAfterMessage(prev, anchorAfterId, toolMessage)
               })
+
+              if (output) {
+                const dedupeKey = `${toolUseId}\n${output.slice(0, 512)}`
+                if (!seenClaudeToolResultChunks.has(dedupeKey)) {
+                  seenClaudeToolResultChunks.add(dedupeKey)
+                  const formatted = `[${resolvedToolName}]\n${output}\n`
+                  setToolOutput((prev) => {
+                    const base = prev ?? ''
+                    const separator = base && !base.endsWith('\n') ? '\n' : ''
+                    return base + separator + formatted
+                  })
+                  onToolOutput?.(formatted)
+                }
+              }
 
               activeThinkMessageId = null
               setActiveReasoningMessageId(null)
@@ -2193,6 +2527,8 @@ export function ProjectChat({
             const raw = typeof dataObj.raw === 'string' ? dataObj.raw : ''
             if (!raw) continue
             setRawEvents((prev) => [...prev, { receivedAtUtc, method, raw }])
+
+            if (isClaude) continue
 
             const toolCall = tryExtractCodexToolCall(raw, method)
             if (!toolCall) continue
