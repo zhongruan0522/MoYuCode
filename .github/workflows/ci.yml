@@ -77,7 +77,27 @@ jobs:
           rsync -a --delete web/dist/ src/OneCode/wwwroot/
 
       - name: Build backend
+        if: github.event_name != 'workflow_dispatch'
         run: dotnet build src/OneCode/OneCode.csproj -c Release -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }}
+
+      - name: Publish backend
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for RID in linux-x64 win-x64 osx-x64; do
+            dotnet publish src/OneCode/OneCode.csproj -c Release -r "${RID}" --self-contained false -o "artifacts/publish/${RID}" -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }}
+          done
+
+      - name: Package release assets
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          tar -czf "artifacts/OneCode-${{ steps.version.outputs.version }}-linux-x64.tar.gz" -C artifacts/publish/linux-x64 .
+          tar -czf "artifacts/OneCode-${{ steps.version.outputs.version }}-osx-x64.tar.gz" -C artifacts/publish/osx-x64 .
+          (cd artifacts/publish/win-x64 && zip -r "../../OneCode-${{ steps.version.outputs.version }}-win-x64.zip" .)
 
       - name: Create release
         if: github.event_name == 'workflow_dispatch'
@@ -88,5 +108,10 @@ jobs:
         run: |
           set -euo pipefail
           TAG="v${{ steps.version.outputs.version }}"
-          gh release create "${TAG}" --title "${TAG}" --notes "${RELEASE_NOTES}" --target "${GITHUB_SHA}"
+          ASSETS=(
+            "artifacts/OneCode-${{ steps.version.outputs.version }}-linux-x64.tar.gz"
+            "artifacts/OneCode-${{ steps.version.outputs.version }}-osx-x64.tar.gz"
+            "artifacts/OneCode-${{ steps.version.outputs.version }}-win-x64.zip"
+          )
+          gh release create "${TAG}" "${ASSETS[@]}" --title "${TAG}" --notes "${RELEASE_NOTES}" --target "${GITHUB_SHA}"
 
