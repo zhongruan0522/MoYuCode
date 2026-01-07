@@ -2,7 +2,7 @@ import type { MouseEvent as ReactMouseEvent, RefObject } from 'react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
-import { ChevronDown, Folder, Search } from 'lucide-react'
+import { ChevronDown, Folder, PanelRight, Search } from 'lucide-react'
 
 export function CodePageHeader({
   pickerAnchorRef,
@@ -16,6 +16,7 @@ export function CodePageHeader({
   sessionsLoading,
   sessionsCount,
   onToggleSessions,
+  onOpenEnvironment,
   actionsAnchorRef,
   actionsOpen,
   onToggleActions,
@@ -23,6 +24,8 @@ export function CodePageHeader({
   showScanButton,
   scanTooltip,
   onScan,
+  workspaceOpen,
+  onToggleWorkspace,
 }: {
   pickerAnchorRef: RefObject<HTMLButtonElement | null>
   pickerOpen: boolean
@@ -35,6 +38,7 @@ export function CodePageHeader({
   sessionsLoading: boolean
   sessionsCount: number
   onToggleSessions: () => void
+  onOpenEnvironment: () => void
   actionsAnchorRef: RefObject<HTMLButtonElement | null>
   actionsOpen: boolean
   onToggleActions: () => void
@@ -42,6 +46,8 @@ export function CodePageHeader({
   showScanButton: boolean
   scanTooltip: string
   onScan: () => void
+  workspaceOpen: boolean
+  onToggleWorkspace: () => void
 }) {
   return (
     <header className="shrink-0 flex h-8 items-center justify-between gap-3">
@@ -118,6 +124,38 @@ export function CodePageHeader({
             />
           </button>
         </Button>
+        <Button asChild variant="outline" size="sm" className="group">
+          <button
+            type="button"
+            onClick={onOpenEnvironment}
+            title="编辑启动环境变量"
+          >
+            环境变量
+          </button>
+        </Button>
+        <Button
+          asChild
+          variant="outline"
+          size="sm"
+          className={cn(
+            'group',
+            workspaceOpen && 'bg-accent text-accent-foreground shadow-sm',
+          )}
+        >
+          <button
+            type="button"
+            onClick={onToggleWorkspace}
+            title={workspaceOpen ? '收起工作区' : '展开工作区'}
+          >
+            <PanelRight
+              className={cn(
+                'size-4 transition-transform duration-200 ease-out',
+                workspaceOpen ? 'rotate-180' : 'rotate-0',
+              )}
+            />
+            <span className="sr-only">{workspaceOpen ? '收起工作区' : '展开工作区'}</span>
+          </button>
+        </Button>
         {showScanButton ? (
           <Button
             type="button"
@@ -143,4 +181,3 @@ export function CodePageHeader({
     </header>
   )
 }
-

@@ -35,3 +35,20 @@ public sealed record SessionTraceSpanDto(
     long DurationMs,
     long TokenCount,
     int EventCount);
+
+public sealed record ProjectSessionMessageDto(
+    string Id,
+    string Role,
+    string Kind,
+    string Text,
+    DateTimeOffset TimestampUtc,
+    string? ToolName,
+    string? ToolUseId,
+    string? ToolInput,
+    string? ToolOutput,
+    bool ToolIsError);
+
+public sealed record ProjectSessionMessagesPageDto(
+    IReadOnlyList<ProjectSessionMessageDto> Messages,
+    int? NextCursor,
+    bool HasMore);

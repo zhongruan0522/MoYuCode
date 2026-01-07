@@ -10,6 +10,7 @@ public sealed class JsonDataStore : IDisposable
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly ConcurrentDictionary<Guid, ProjectEntity> _projects;
     private readonly ConcurrentDictionary<Guid, ProviderEntity> _providers;
+    private readonly ConcurrentDictionary<ToolType, ToolSettingsEntity> _toolSettings;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private bool _disposed;
 
@@ -27,6 +28,7 @@ public sealed class JsonDataStore : IDisposable
 
         _projects = new ConcurrentDictionary<Guid, ProjectEntity>();
         _providers = new ConcurrentDictionary<Guid, ProviderEntity>();
+        _toolSettings = new ConcurrentDictionary<ToolType, ToolSettingsEntity>();
 
         // Load data on initialization
         LoadDataAsync().GetAwaiter().GetResult();
@@ -35,6 +37,8 @@ public sealed class JsonDataStore : IDisposable
     public IQueryable<ProjectEntity> Projects => _projects.Values.AsQueryable();
 
     public IQueryable<ProviderEntity> Providers => _providers.Values.AsQueryable();
+
+    public IQueryable<ToolSettingsEntity> ToolSettings => _toolSettings.Values.AsQueryable();
 
     public async Task LoadDataAsync()
     {
@@ -68,12 +72,30 @@ public sealed class JsonDataStore : IDisposable
                     _projects.Clear();
                     foreach (var project in projectsList)
                     {
+                        project.LaunchEnvironment ??= new Dictionary<string, string>(StringComparer.Ordinal);
                         // Resolve provider reference
                         if (project.ProviderId.HasValue && _providers.TryGetValue(project.ProviderId.Value, out var provider))
                         {
                             project.Provider = provider;
                         }
                         _projects[project.Id] = project;
+                    }
+                }
+            }
+
+            // Load tool settings
+            var toolSettingsFile = Path.Combine(_dataDirectory, "tool-settings.json");
+            if (File.Exists(toolSettingsFile))
+            {
+                var json = await File.ReadAllTextAsync(toolSettingsFile);
+                var settingsList = JsonSerializer.Deserialize<List<ToolSettingsEntity>>(json, _jsonOptions);
+                if (settingsList != null)
+                {
+                    _toolSettings.Clear();
+                    foreach (var settings in settingsList)
+                    {
+                        settings.LaunchEnvironment ??= new Dictionary<string, string>(StringComparer.Ordinal);
+                        _toolSettings[settings.ToolType] = settings;
                     }
                 }
             }
@@ -100,6 +122,12 @@ public sealed class JsonDataStore : IDisposable
             var projectsList = _projects.Values.OrderBy(p => p.Name).ToList();
             var projectsJson = JsonSerializer.Serialize(projectsList, _jsonOptions);
             await File.WriteAllTextAsync(projectsFile, projectsJson);
+
+            // Save tool settings
+            var toolSettingsFile = Path.Combine(_dataDirectory, "tool-settings.json");
+            var toolSettingsList = _toolSettings.Values.OrderBy(s => s.ToolType).ToList();
+            var toolSettingsJson = JsonSerializer.Serialize(toolSettingsList, _jsonOptions);
+            await File.WriteAllTextAsync(toolSettingsFile, toolSettingsJson);
         }
         finally
         {
@@ -143,6 +171,23 @@ public sealed class JsonDataStore : IDisposable
             return project;
         }
         return null;
+    }
+
+    public ToolSettingsEntity? GetToolSettings(ToolType toolType)
+    {
+        return _toolSettings.TryGetValue(toolType, out var settings) ? settings : null;
+    }
+
+    public ToolSettingsEntity GetOrCreateToolSettings(ToolType toolType)
+    {
+        if (_toolSettings.TryGetValue(toolType, out var settings))
+        {
+            return settings;
+        }
+
+        settings = new ToolSettingsEntity { ToolType = toolType };
+        _toolSettings[toolType] = settings;
+        return settings;
     }
 
     public bool ProviderExists(Guid id)

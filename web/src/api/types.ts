@@ -41,6 +41,15 @@ export type ToolStatusDto = {
   platform: string
 }
 
+export type ToolEnvironmentDto = {
+  toolType: ToolType
+  environment: Record<string, string>
+}
+
+export type ToolEnvironmentUpdateRequest = {
+  environment: Record<string, string>
+}
+
 export type JobDto = {
   id: string
   kind: string
@@ -95,6 +104,15 @@ export type ProjectUpsertRequest = {
   model: string | null
 }
 
+export type ProjectEnvironmentDto = {
+  projectId: string
+  environment: Record<string, string>
+}
+
+export type ProjectEnvironmentUpdateRequest = {
+  environment: Record<string, string>
+}
+
 export type SessionEventCountsDto = {
   message: number
   functionCall: number
@@ -139,6 +157,25 @@ export type ProjectSessionDto = {
   tokenUsage: SessionTokenUsageDto
   timeline: SessionTimelineBucketDto[]
   trace?: SessionTraceSpanDto[]
+}
+
+export type ProjectSessionMessageDto = {
+  id: string
+  role: string
+  kind: string
+  text: string
+  timestampUtc: string
+  toolName: string | null
+  toolUseId: string | null
+  toolInput: string | null
+  toolOutput: string | null
+  toolIsError: boolean
+}
+
+export type ProjectSessionMessagesPageDto = {
+  messages: ProjectSessionMessageDto[]
+  nextCursor: number | null
+  hasMore: boolean
 }
 
 export type DriveDto = {

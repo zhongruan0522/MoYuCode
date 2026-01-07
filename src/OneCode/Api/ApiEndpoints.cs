@@ -630,6 +630,42 @@ public static class ApiEndpoints
                 cancellationToken);
         });
 
+        tools.MapGet("/codex/environment", (JsonDataStore store) =>
+        {
+            var settings = store.GetToolSettings(ToolType.Codex);
+            var env = settings?.LaunchEnvironment ?? new Dictionary<string, string>(StringComparer.Ordinal);
+            return new ToolEnvironmentDto(ToolType.Codex, env);
+        });
+
+        tools.MapPut("/codex/environment", async (
+            [FromBody] ToolEnvironmentUpdateRequest request,
+            JsonDataStore store) =>
+        {
+            var settings = store.GetOrCreateToolSettings(ToolType.Codex);
+            settings.LaunchEnvironment = NormalizeEnvironment(request.Environment);
+            settings.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            await store.SaveDataAsync();
+            return new ToolEnvironmentDto(ToolType.Codex, settings.LaunchEnvironment);
+        });
+
+        tools.MapGet("/claude/environment", (JsonDataStore store) =>
+        {
+            var settings = store.GetToolSettings(ToolType.ClaudeCode);
+            var env = settings?.LaunchEnvironment ?? new Dictionary<string, string>(StringComparer.Ordinal);
+            return new ToolEnvironmentDto(ToolType.ClaudeCode, env);
+        });
+
+        tools.MapPut("/claude/environment", async (
+            [FromBody] ToolEnvironmentUpdateRequest request,
+            JsonDataStore store) =>
+        {
+            var settings = store.GetOrCreateToolSettings(ToolType.ClaudeCode);
+            settings.LaunchEnvironment = NormalizeEnvironment(request.Environment);
+            settings.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            await store.SaveDataAsync();
+            return new ToolEnvironmentDto(ToolType.ClaudeCode, settings.LaunchEnvironment);
+        });
+
         tools.MapPost("/node/install", async (
             JobManager jobManager,
             HttpContext httpContext,
@@ -1554,6 +1590,36 @@ public static class ApiEndpoints
             return ToDto(entity);
         });
 
+        projects.MapGet("/{id:guid}/environment", (Guid id, JsonDataStore store) =>
+        {
+            var project = store.Projects.FirstOrDefault(x => x.Id == id);
+            if (project is null)
+            {
+                throw new ApiHttpException(StatusCodes.Status404NotFound, "Project not found.");
+            }
+
+            var env = project.LaunchEnvironment ?? new Dictionary<string, string>(StringComparer.Ordinal);
+            return new ProjectEnvironmentDto(project.Id, env);
+        });
+
+        projects.MapPut("/{id:guid}/environment", async (
+            Guid id,
+            [FromBody] ProjectEnvironmentUpdateRequest request,
+            JsonDataStore store) =>
+        {
+            var project = store.Projects.FirstOrDefault(x => x.Id == id);
+            if (project is null)
+            {
+                throw new ApiHttpException(StatusCodes.Status404NotFound, "Project not found.");
+            }
+
+            project.LaunchEnvironment = NormalizeEnvironment(request.Environment);
+            project.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            await store.SaveDataAsync();
+
+            return new ProjectEnvironmentDto(project.Id, project.LaunchEnvironment);
+        });
+
         projects.MapDelete("/{id:guid}", async (Guid id, JsonDataStore store) =>
         {
             var entity = store.Projects.FirstOrDefault(x => x.Id == id);
@@ -1599,11 +1665,17 @@ public static class ApiEndpoints
                 throw new ApiHttpException(StatusCodes.Status400BadRequest, ex.Message);
             }
 
+            var toolSettings = store.GetToolSettings(project.ToolType);
+            var mergedEnvironment = MergeLaunchEnvironment(
+                toolSettings?.LaunchEnvironment,
+                project.LaunchEnvironment,
+                launch.Env);
+
             terminalWindowLauncher.LaunchCommandWindow(
                 workingDirectory: project.WorkspacePath,
                 windowTitle: $"OneCode - {project.ToolType} - {project.Name}",
                 argv: launch.Args,
-                environment: launch.Env);
+                environment: mergedEnvironment);
 
             project.LastStartedAtUtc = DateTimeOffset.UtcNow;
             project.UpdatedAtUtc = DateTimeOffset.UtcNow;
@@ -1712,6 +1784,133 @@ public static class ApiEndpoints
             }
 
             throw new ApiHttpException(StatusCodes.Status400BadRequest, "Only Codex and Claude Code sessions are supported.");
+        });
+
+        projects.MapGet("/{id:guid}/sessions/{sessionId}/messages", async (
+            Guid id,
+            string sessionId,
+            int? before,
+            int? limit,
+            JsonDataStore store,
+            CancellationToken cancellationToken) =>
+        {
+            var project = store.Projects.FirstOrDefault(x => x.Id == id);
+            if (project is null)
+            {
+                throw new ApiHttpException(StatusCodes.Status404NotFound, "Project not found.");
+            }
+
+            if (string.IsNullOrWhiteSpace(sessionId))
+            {
+                throw new ApiHttpException(StatusCodes.Status400BadRequest, "SessionId is required.");
+            }
+
+            var maxLimit = 200;
+            var pageSize = Math.Clamp(limit ?? 30, 1, maxLimit);
+
+            IReadOnlyList<SessionMessageEntry> entries;
+            if (project.ToolType == ToolType.Codex)
+            {
+                var filePath = await TryFindCodexSessionFileAsync(project, sessionId, cancellationToken);
+                if (string.IsNullOrWhiteSpace(filePath))
+                {
+                    return new ProjectSessionMessagesPageDto(Array.Empty<ProjectSessionMessageDto>(), null, false);
+                }
+
+                entries = await ReadCodexSessionMessagesAsync(filePath, cancellationToken);
+            }
+            else if (project.ToolType == ToolType.ClaudeCode)
+            {
+                var filePaths = await FindClaudeSessionFilesAsync(project, sessionId, cancellationToken);
+                if (filePaths.Count == 0)
+                {
+                    return new ProjectSessionMessagesPageDto(Array.Empty<ProjectSessionMessageDto>(), null, false);
+                }
+
+                entries = await ReadClaudeSessionMessagesAsync(filePaths, cancellationToken);
+            }
+            else
+            {
+                throw new ApiHttpException(StatusCodes.Status400BadRequest, "Only Codex and Claude Code sessions are supported.");
+            }
+
+            if (entries.Count == 0)
+            {
+                return new ProjectSessionMessagesPageDto(Array.Empty<ProjectSessionMessageDto>(), null, false);
+            }
+
+            var ordered = entries
+                .OrderBy(x => x.TimestampUtc)
+                .ThenBy(x => x.Sequence)
+                .ToArray();
+
+            var dedupeWindow = TimeSpan.FromMilliseconds(10);
+            var lastSeenByFingerprint = new Dictionary<SessionMessageFingerprint, DateTimeOffset>();
+            var dedupedEntries = new List<SessionMessageEntry>(ordered.Length);
+
+            foreach (var entry in ordered)
+            {
+                var fingerprint = new SessionMessageFingerprint(
+                    entry.Role ?? string.Empty,
+                    entry.Kind ?? string.Empty,
+                    entry.Text ?? string.Empty,
+                    entry.ToolName ?? string.Empty,
+                    entry.ToolUseId ?? string.Empty,
+                    entry.ToolInput ?? string.Empty,
+                    entry.ToolOutput ?? string.Empty,
+                    entry.ToolIsError);
+
+                if (lastSeenByFingerprint.TryGetValue(fingerprint, out var lastSeen)
+                    && (entry.TimestampUtc - lastSeen).Duration() <= dedupeWindow)
+                {
+                    continue;
+                }
+
+                lastSeenByFingerprint[fingerprint] = entry.TimestampUtc;
+                dedupedEntries.Add(entry);
+            }
+
+            var messages = new ProjectSessionMessageDto[dedupedEntries.Count];
+            for (var i = 0; i < dedupedEntries.Count; i++)
+            {
+                var entry = dedupedEntries[i];
+                var idValue = string.IsNullOrWhiteSpace(entry.Id)
+                    ? $"{sessionId}:{i}"
+                    : entry.Id;
+                messages[i] = new ProjectSessionMessageDto(
+                    Id: idValue,
+                    Role: entry.Role,
+                    Kind: entry.Kind,
+                    Text: entry.Text,
+                    TimestampUtc: entry.TimestampUtc,
+                    ToolName: entry.ToolName,
+                    ToolUseId: entry.ToolUseId,
+                    ToolInput: entry.ToolInput,
+                    ToolOutput: entry.ToolOutput,
+                    ToolIsError: entry.ToolIsError);
+            }
+
+            var total = messages.Length;
+            var beforeIndex = before ?? total;
+            if (beforeIndex < 0)
+            {
+                beforeIndex = 0;
+            }
+
+            if (beforeIndex > total)
+            {
+                beforeIndex = total;
+            }
+
+            var start = Math.Max(0, beforeIndex - pageSize);
+            var slice = messages
+                .Skip(start)
+                .Take(beforeIndex - start)
+                .ToArray();
+            var hasMore = start > 0;
+            var nextCursor = hasMore ? start : (int?)null;
+
+            return new ProjectSessionMessagesPageDto(slice, nextCursor, hasMore);
         });
 
         projects.MapGet("/scan-codex-sessions", async (
@@ -2408,6 +2607,31 @@ public static class ApiEndpoints
         string Id,
         string Cwd,
         DateTimeOffset CreatedAtUtc);
+
+    private sealed class SessionMessageEntry
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Role { get; set; } = "agent";
+        public string Kind { get; set; } = "text";
+        public string Text { get; set; } = string.Empty;
+        public DateTimeOffset TimestampUtc { get; set; }
+        public string? ToolName { get; set; }
+        public string? ToolUseId { get; set; }
+        public string? ToolInput { get; set; }
+        public string? ToolOutput { get; set; }
+        public bool ToolIsError { get; set; }
+        public int Sequence { get; set; }
+    }
+
+    private readonly record struct SessionMessageFingerprint(
+        string Role,
+        string Kind,
+        string Text,
+        string ToolName,
+        string ToolUseId,
+        string ToolInput,
+        string ToolOutput,
+        bool ToolIsError);
 
     private enum CodexSessionEventKind
     {
@@ -3806,6 +4030,610 @@ public static class ApiEndpoints
         {
             return null;
         }
+    }
+
+    private static async Task<string?> TryFindCodexSessionFileAsync(
+        ProjectEntity project,
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        var sessionsRoot = Path.Combine(GetCodexHomePath(), "sessions");
+        if (!Directory.Exists(sessionsRoot))
+        {
+            return null;
+        }
+
+        foreach (var filePath in Directory.EnumerateFiles(sessionsRoot, "*.jsonl", SearchOption.AllDirectories))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var meta = await TryReadCodexSessionMetaAsync(filePath, cancellationToken);
+            if (meta is null)
+            {
+                continue;
+            }
+
+            if (!string.Equals(meta.Id, sessionId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!IsSameOrDescendantPath(project.WorkspacePath, meta.Cwd))
+            {
+                continue;
+            }
+
+            return filePath;
+        }
+
+        return null;
+    }
+
+    private static async Task<IReadOnlyList<string>> FindClaudeSessionFilesAsync(
+        ProjectEntity project,
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        var projectsRoot = GetClaudeProjectsPath();
+        if (!Directory.Exists(projectsRoot))
+        {
+            return Array.Empty<string>();
+        }
+
+        var matches = new List<string>();
+        foreach (var filePath in Directory.EnumerateFiles(projectsRoot, "*.jsonl", SearchOption.AllDirectories))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var meta = await TryReadClaudeSessionMetaAsync(filePath, cancellationToken);
+            if (meta is null)
+            {
+                continue;
+            }
+
+            if (!string.Equals(meta.Id, sessionId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!IsSameOrDescendantPath(project.WorkspacePath, meta.Cwd))
+            {
+                continue;
+            }
+
+            matches.Add(filePath);
+        }
+
+        return matches;
+    }
+
+    private static async Task<IReadOnlyList<SessionMessageEntry>> ReadCodexSessionMessagesAsync(
+        string filePath,
+        CancellationToken cancellationToken)
+    {
+        var entries = new List<SessionMessageEntry>();
+        var toolIndexByCallId = new Dictionary<string, int>(StringComparer.Ordinal);
+        var pendingToolOutputs = new Dictionary<string, (string Output, bool IsError)>(StringComparer.Ordinal);
+        var sequence = 0;
+
+        await using var stream = File.OpenRead(filePath);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var line = await reader.ReadLineAsync(cancellationToken);
+            if (line is null)
+            {
+                break;
+            }
+
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (!TryReadTimestamp(root, out var timestamp))
+            {
+                continue;
+            }
+
+            var payload = root.TryGetProperty("payload", out var payloadProp) && payloadProp.ValueKind == JsonValueKind.Object
+                ? payloadProp
+                : root;
+            var type = ReadStringProperty(payload, "type") ?? ReadStringProperty(root, "type");
+            if (string.IsNullOrWhiteSpace(type))
+            {
+                continue;
+            }
+
+            switch (type)
+            {
+                case "message":
+                case "user_message":
+                case "agent_message":
+                    {
+                        var role = ResolveCodexRole(type, payload);
+                        var text = ReadTextPayload(payload);
+                        if (string.IsNullOrWhiteSpace(text))
+                        {
+                            break;
+                        }
+
+                        entries.Add(new SessionMessageEntry
+                        {
+                            Role = role,
+                            Kind = "text",
+                            Text = text,
+                            TimestampUtc = timestamp,
+                            Sequence = sequence++,
+                        });
+                        break;
+                    }
+                case "agent_reasoning":
+                case "reasoning":
+                    {
+                        var text = ReadTextPayload(payload);
+                        if (string.IsNullOrWhiteSpace(text))
+                        {
+                            break;
+                        }
+
+                        entries.Add(new SessionMessageEntry
+                        {
+                            Role = "agent",
+                            Kind = "think",
+                            Text = text,
+                            TimestampUtc = timestamp,
+                            Sequence = sequence++,
+                        });
+                        break;
+                    }
+                case "function_call":
+                case "custom_tool_call":
+                case "tool_call":
+                    {
+                        var toolName = ReadStringProperty(payload, "name", "tool_name", "tool");
+                        var callId = ReadStringProperty(payload, "call_id", "tool_call_id", "tool_use_id", "id");
+                        var toolInput = ReadJsonProperty(payload, "arguments", "args", "input", "parameters");
+
+                        var entry = new SessionMessageEntry
+                        {
+                            Role = "agent",
+                            Kind = "tool",
+                            Text = toolInput ?? string.Empty,
+                            TimestampUtc = timestamp,
+                            ToolName = toolName,
+                            ToolUseId = callId,
+                            ToolInput = toolInput,
+                            Sequence = sequence++,
+                        };
+
+                        var index = entries.Count;
+                        entries.Add(entry);
+
+                        if (!string.IsNullOrWhiteSpace(callId))
+                        {
+                            toolIndexByCallId[callId!] = index;
+                            if (pendingToolOutputs.TryGetValue(callId!, out var pending))
+                            {
+                                entry.ToolOutput = pending.Output;
+                                entry.ToolIsError = pending.IsError;
+                                pendingToolOutputs.Remove(callId!);
+                            }
+                        }
+
+                        break;
+                    }
+                case "function_call_output":
+                case "custom_tool_call_output":
+                case "tool_call_output":
+                    {
+                        var callId = ReadStringProperty(payload, "call_id", "tool_call_id", "tool_use_id", "id");
+                        var output = ReadJsonProperty(payload, "output", "result", "content", "message", "data");
+                        var isError = ReadBoolProperty(payload, "is_error", "error");
+
+                        if (!string.IsNullOrWhiteSpace(callId) && toolIndexByCallId.TryGetValue(callId!, out var index))
+                        {
+                            var entry = entries[index];
+                            entry.ToolOutput = output ?? entry.ToolOutput;
+                            entry.ToolIsError = isError || entry.ToolIsError;
+                        }
+                        else if (!string.IsNullOrWhiteSpace(callId))
+                        {
+                            pendingToolOutputs[callId!] = (output ?? string.Empty, isError);
+                        }
+                        else if (!string.IsNullOrWhiteSpace(output))
+                        {
+                            entries.Add(new SessionMessageEntry
+                            {
+                                Role = "agent",
+                                Kind = "tool",
+                                Text = string.Empty,
+                                TimestampUtc = timestamp,
+                                ToolOutput = output,
+                                ToolIsError = isError,
+                                Sequence = sequence++,
+                            });
+                        }
+
+                        break;
+                    }
+            }
+        }
+
+        return entries;
+    }
+
+    private static async Task<IReadOnlyList<SessionMessageEntry>> ReadClaudeSessionMessagesAsync(
+        IReadOnlyList<string> filePaths,
+        CancellationToken cancellationToken)
+    {
+        var entries = new List<SessionMessageEntry>();
+        var toolIndexByUseId = new Dictionary<string, int>(StringComparer.Ordinal);
+        var pendingToolOutputs = new Dictionary<string, (string Output, bool IsError)>(StringComparer.Ordinal);
+        var sequence = 0;
+
+        foreach (var filePath in filePaths)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            await using var stream = File.OpenRead(filePath);
+            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var line = await reader.ReadLineAsync(cancellationToken);
+                if (line is null)
+                {
+                    break;
+                }
+
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                using var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+                if (!TryReadTimestamp(root, out var timestamp))
+                {
+                    continue;
+                }
+
+                var type = ReadStringProperty(root, "type");
+                if (string.IsNullOrWhiteSpace(type))
+                {
+                    continue;
+                }
+
+                if (type != "assistant" && type != "user")
+                {
+                    continue;
+                }
+
+                var role = type == "user" ? "user" : "agent";
+                var message = root.TryGetProperty("message", out var messageProp) && messageProp.ValueKind == JsonValueKind.Object
+                    ? messageProp
+                    : root;
+
+                if (message.TryGetProperty("content", out var contentProp))
+                {
+                    if (contentProp.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var item in contentProp.EnumerateArray())
+                        {
+                            if (item.ValueKind != JsonValueKind.Object)
+                            {
+                                continue;
+                            }
+
+                            var itemType = ReadStringProperty(item, "type") ?? string.Empty;
+                            if (itemType == "text")
+                            {
+                                var text = ReadTextPayload(item);
+                                if (string.IsNullOrWhiteSpace(text))
+                                {
+                                    continue;
+                                }
+
+                                entries.Add(new SessionMessageEntry
+                                {
+                                    Role = role,
+                                    Kind = "text",
+                                    Text = text,
+                                    TimestampUtc = timestamp,
+                                    Sequence = sequence++,
+                                });
+                                continue;
+                            }
+
+                            if (itemType == "tool_use")
+                            {
+                                var toolName = ReadStringProperty(item, "name");
+                                var toolUseId = ReadStringProperty(item, "id", "tool_use_id");
+                                var toolInput = ReadJsonProperty(item, "input");
+
+                                var entry = new SessionMessageEntry
+                                {
+                                    Role = "agent",
+                                    Kind = "tool",
+                                    Text = toolInput ?? string.Empty,
+                                    TimestampUtc = timestamp,
+                                    ToolName = toolName,
+                                    ToolUseId = toolUseId,
+                                    ToolInput = toolInput,
+                                    Sequence = sequence++,
+                                };
+
+                                var index = entries.Count;
+                                entries.Add(entry);
+
+                                if (!string.IsNullOrWhiteSpace(toolUseId))
+                                {
+                                    toolIndexByUseId[toolUseId!] = index;
+                                    if (pendingToolOutputs.TryGetValue(toolUseId!, out var pending))
+                                    {
+                                        entry.ToolOutput = pending.Output;
+                                        entry.ToolIsError = pending.IsError;
+                                        pendingToolOutputs.Remove(toolUseId!);
+                                    }
+                                }
+                                continue;
+                            }
+
+                            if (itemType == "tool_result")
+                            {
+                                var toolUseId = ReadStringProperty(item, "tool_use_id", "id");
+                                var output = ReadJsonProperty(item, "content", "output", "result");
+                                var isError = ReadBoolProperty(item, "is_error", "error");
+
+                                if (!string.IsNullOrWhiteSpace(toolUseId) && toolIndexByUseId.TryGetValue(toolUseId!, out var index))
+                                {
+                                    var entry = entries[index];
+                                    entry.ToolOutput = output ?? entry.ToolOutput;
+                                    entry.ToolIsError = isError || entry.ToolIsError;
+                                }
+                                else if (!string.IsNullOrWhiteSpace(toolUseId))
+                                {
+                                    pendingToolOutputs[toolUseId!] = (output ?? string.Empty, isError);
+                                }
+                                else if (!string.IsNullOrWhiteSpace(output))
+                                {
+                                    entries.Add(new SessionMessageEntry
+                                    {
+                                        Role = "agent",
+                                        Kind = "tool",
+                                        Text = string.Empty,
+                                        TimestampUtc = timestamp,
+                                        ToolOutput = output,
+                                        ToolIsError = isError,
+                                        Sequence = sequence++,
+                                    });
+                                }
+
+                                continue;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        var text = ReadTextPayload(contentProp);
+                        if (!string.IsNullOrWhiteSpace(text))
+                        {
+                            entries.Add(new SessionMessageEntry
+                            {
+                                Role = role,
+                                Kind = "text",
+                                Text = text,
+                                TimestampUtc = timestamp,
+                                Sequence = sequence++,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        return entries;
+    }
+
+    private static string ResolveCodexRole(string type, JsonElement payload)
+    {
+        if (type == "user_message")
+        {
+            return "user";
+        }
+
+        if (type == "agent_message")
+        {
+            return "agent";
+        }
+
+        var role = ReadStringProperty(payload, "role");
+        if (string.Equals(role, "user", StringComparison.OrdinalIgnoreCase))
+        {
+            return "user";
+        }
+
+        if (string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase))
+        {
+            return "agent";
+        }
+
+        if (string.Equals(role, "system", StringComparison.OrdinalIgnoreCase))
+        {
+            return "system";
+        }
+
+        return "agent";
+    }
+
+    private static string? ReadStringProperty(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (element.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.String)
+            {
+                var value = prop.GetString();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    return value;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static bool ReadBoolProperty(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!element.TryGetProperty(name, out var prop))
+            {
+                continue;
+            }
+
+            if (prop.ValueKind == JsonValueKind.True)
+            {
+                return true;
+            }
+
+            if (prop.ValueKind == JsonValueKind.False)
+            {
+                return false;
+            }
+
+            if (prop.ValueKind == JsonValueKind.String && bool.TryParse(prop.GetString(), out var parsed))
+            {
+                return parsed;
+            }
+        }
+
+        return false;
+    }
+
+    private static string? ReadJsonProperty(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!element.TryGetProperty(name, out var prop))
+            {
+                continue;
+            }
+
+            var value = ReadJsonValueAsString(prop);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ReadTextPayload(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            return element.GetString();
+        }
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            if (element.TryGetProperty("text", out var textProp) && textProp.ValueKind == JsonValueKind.String)
+            {
+                return textProp.GetString();
+            }
+
+            if (element.TryGetProperty("content", out var contentProp))
+            {
+                return ReadTextPayload(contentProp);
+            }
+
+            if (element.TryGetProperty("message", out var messageProp))
+            {
+                return ReadTextPayload(messageProp);
+            }
+
+            if (element.TryGetProperty("parts", out var partsProp))
+            {
+                return ReadTextPayload(partsProp);
+            }
+        }
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            var builder = new StringBuilder();
+            foreach (var item in element.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String)
+                {
+                    AppendText(builder, item.GetString());
+                    continue;
+                }
+
+                if (item.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                if (item.TryGetProperty("type", out var typeProp)
+                    && typeProp.ValueKind == JsonValueKind.String
+                    && string.Equals(typeProp.GetString(), "text", StringComparison.OrdinalIgnoreCase)
+                    && item.TryGetProperty("text", out var textItem)
+                    && textItem.ValueKind == JsonValueKind.String)
+                {
+                    AppendText(builder, textItem.GetString());
+                    continue;
+                }
+
+                var nested = ReadTextPayload(item);
+                if (!string.IsNullOrWhiteSpace(nested))
+                {
+                    AppendText(builder, nested);
+                }
+            }
+
+            var combined = builder.ToString();
+            return string.IsNullOrWhiteSpace(combined) ? null : combined;
+        }
+
+        return null;
+    }
+
+    private static void AppendText(StringBuilder builder, string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        if (builder.Length > 0)
+        {
+            builder.Append('\n');
+        }
+
+        builder.Append(text);
+    }
+
+    private static string? ReadJsonValueAsString(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            return element.GetString();
+        }
+
+        if (element.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return null;
+        }
+
+        return JsonSerializer.Serialize(element);
     }
 
     private static IReadOnlyList<SessionTimelineBucketDto> BuildTimeline(
@@ -5847,6 +6675,73 @@ public static class ApiEndpoints
             LastStartedAtUtc: entity.LastStartedAtUtc,
             CreatedAtUtc: entity.CreatedAtUtc,
             UpdatedAtUtc: entity.UpdatedAtUtc);
+    }
+
+    private static Dictionary<string, string> NormalizeEnvironment(
+        IDictionary<string, string>? environment)
+    {
+        var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (environment is null)
+        {
+            return normalized;
+        }
+
+        foreach (var (key, value) in environment)
+        {
+            var trimmedKey = (key ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(trimmedKey))
+            {
+                continue;
+            }
+
+            var trimmedValue = value?.Trim();
+            if (string.IsNullOrEmpty(trimmedValue))
+            {
+                continue;
+            }
+
+            normalized[trimmedKey] = trimmedValue;
+        }
+
+        return normalized;
+    }
+
+    private static IReadOnlyDictionary<string, string>? MergeLaunchEnvironment(
+        IReadOnlyDictionary<string, string>? toolEnvironment,
+        IReadOnlyDictionary<string, string>? projectEnvironment,
+        IReadOnlyDictionary<string, string>? launchEnvironment)
+    {
+        var hasToolEnv = toolEnvironment is { Count: > 0 };
+        var hasProjectEnv = projectEnvironment is { Count: > 0 };
+        var hasLaunchEnv = launchEnvironment is { Count: > 0 };
+        if (!hasToolEnv && !hasProjectEnv && !hasLaunchEnv)
+        {
+            return null;
+        }
+
+        var merged = new Dictionary<string, string>(StringComparer.Ordinal);
+        Apply(toolEnvironment);
+        Apply(launchEnvironment);
+        Apply(projectEnvironment);
+        return merged;
+
+        void Apply(IReadOnlyDictionary<string, string>? source)
+        {
+            if (source is null)
+            {
+                return;
+            }
+
+            foreach (var (key, value) in source)
+            {
+                if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
+                {
+                    continue;
+                }
+
+                merged[key] = value;
+            }
+        }
     }
 
     private static (IReadOnlyList<string> Args, IReadOnlyDictionary<string, string>? Env) BuildCodexLaunch(ProjectEntity project)

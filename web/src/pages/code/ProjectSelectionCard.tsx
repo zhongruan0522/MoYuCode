@@ -1,8 +1,9 @@
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { ProjectDto, ToolStatusDto } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
-import { Plus, Search } from 'lucide-react'
+import { MoreHorizontal, Plus, Search } from 'lucide-react'
 
 export function ProjectSelectionCard({
   projects,
@@ -14,6 +15,7 @@ export function ProjectSelectionCard({
   scanCommandLabel,
   scanTooltip,
   onSelectProject,
+  onOpenProjectMenu,
   onCreateProject,
   onScanProjects,
   onStopScan,
@@ -28,6 +30,10 @@ export function ProjectSelectionCard({
   scanCommandLabel: string
   scanTooltip: string
   onSelectProject: (id: string) => void
+  onOpenProjectMenu: (
+    project: ProjectDto,
+    event: ReactMouseEvent<HTMLButtonElement>,
+  ) => void
   onCreateProject: () => void
   onScanProjects: () => void
   onStopScan: () => void
@@ -110,22 +116,43 @@ export function ProjectSelectionCard({
       ) : (
         <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
           {projects.map((p) => (
-            <button
+            <div
               key={p.id}
-              type="button"
               className={cn(
-                'rounded-md border bg-background p-3 text-left',
-                'transition-[background-color,border-color,box-shadow,transform] duration-200 ease-out',
+                'rounded-md border bg-background p-3',
+                'transition-[background-color,border-color,box-shadow] duration-200 ease-out',
                 'hover:bg-accent/40 hover:border-border hover:shadow-sm',
-                'active:scale-[0.99]',
               )}
-              onClick={() => onSelectProject(p.id)}
             >
-              <div className="truncate text-sm font-medium">{p.name}</div>
-              <div className="mt-1 truncate text-xs text-muted-foreground">
-                {p.workspacePath}
+              <div className="flex items-start gap-2">
+                <button
+                  type="button"
+                  className={cn(
+                    'min-w-0 flex-1 text-left',
+                    'transition-transform duration-200 ease-out',
+                    'active:scale-[0.99]',
+                  )}
+                  onClick={() => onSelectProject(p.id)}
+                >
+                  <div className="truncate text-sm font-medium">{p.name}</div>
+                  <div className="mt-1 truncate text-xs text-muted-foreground">
+                    {p.workspacePath}
+                  </div>
+                </button>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  className="shrink-0"
+                  aria-haspopup="menu"
+                  title="管理"
+                  onClick={(event) => onOpenProjectMenu(p, event)}
+                >
+                  <MoreHorizontal className="size-4" />
+                  <span className="sr-only">管理</span>
+                </Button>
               </div>
-            </button>
+            </div>
           ))}
         </div>
       )}

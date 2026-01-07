@@ -12,9 +12,11 @@ import { CodePage } from '@/pages/CodePage'
 import { NodeInstallPage } from '@/pages/NodeInstallPage'
 import { ToolPage } from '@/pages/ToolPage'
 import Providers from '@/pages/Providers'
+import { SettingsPage } from '@/pages/SettingsPage'
+import { AboutSection } from '@/pages/settings/AboutSection'
 import { api } from '@/api/client'
 import { ThemeTogglerButton } from '@animate-ui/components-buttons-theme-toggler'
-import { Settings } from 'lucide-react'
+import { Database, Settings } from 'lucide-react'
 
 function MaskIcon({ src, className }: { src: string; className?: string }) {
   return (
@@ -65,6 +67,29 @@ function NavIconLink({
   )
 }
 
+function parseVersion(version: string): number[] | null {
+  const cleaned = version.trim().replace(/^v/i, '')
+  const base = cleaned.split('-')[0]
+  if (!base) return null
+  const parts = base.split('.').map((part) => Number.parseInt(part, 10))
+  if (parts.some((part) => Number.isNaN(part))) return null
+  return parts
+}
+
+function compareVersions(left: string, right: string): number {
+  const leftParts = parseVersion(left)
+  const rightParts = parseVersion(right)
+  if (!leftParts || !rightParts) return 0
+  const maxLength = Math.max(leftParts.length, rightParts.length)
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftValue = leftParts[index] ?? 0
+    const rightValue = rightParts[index] ?? 0
+    if (leftValue > rightValue) return 1
+    if (leftValue < rightValue) return -1
+  }
+  return 0
+}
+
 function LegacyProjectRouteRedirect() {
   const { id } = useParams()
   if (!id) return <Navigate to="/code" replace />
@@ -73,6 +98,8 @@ function LegacyProjectRouteRedirect() {
 
 export default function App() {
   const [appVersion, setAppVersion] = useState<string | null>(null)
+  const [latestVersion, setLatestVersion] = useState<string | null>(null)
+  const [updateAvailable, setUpdateAvailable] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -86,6 +113,33 @@ export default function App() {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    fetch('https://api.github.com/repos/AIDotNet/OneCode/releases/latest', {
+      signal: controller.signal,
+      headers: {
+        Accept: 'application/vnd.github+json',
+      },
+    })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error())))
+      .then((data) => {
+        const version = typeof data?.tag_name === 'string' ? data.tag_name : null
+        setLatestVersion(version)
+      })
+      .catch(() => {})
+    return () => {
+      controller.abort()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!appVersion || !latestVersion) {
+      setUpdateAvailable(false)
+      return
+    }
+    setUpdateAvailable(compareVersions(latestVersion, appVersion) > 0)
+  }, [appVersion, latestVersion])
 
   return (
     <div className="h-screen overflow-hidden bg-background text-foreground">
@@ -105,20 +159,30 @@ export default function App() {
             <NavIconLink
               to="/providers"
               label="提供商管理"
-              icon={<Settings className="size-5" aria-hidden="true" />}
+              icon={<Database className="size-5" aria-hidden="true" />}
             />
           </nav>
 
-          <div className="mt-auto flex flex-col items-center">
+          <div className="mt-auto flex flex-col items-center gap-2">
             <ThemeTogglerButton
               aria-label="切换主题"
               title="切换主题"
               variant="ghost"
               size="lg"
             />
+            <NavIconLink
+              to="/settings"
+              label="设置"
+              icon={<Settings className="size-5" aria-hidden="true" />}
+            />
             {appVersion ? (
               <div className="mt-1 w-full text-center text-[10px] leading-none text-muted-foreground">
-                v{appVersion}
+                <span className="relative inline-flex items-center">
+                  v{appVersion}
+                  {updateAvailable ? (
+                    <span className="ml-1 inline-flex size-1.5 rounded-full bg-red-500" />
+                  ) : null}
+                </span>
               </div>
             ) : null}
           </div>
@@ -142,6 +206,10 @@ export default function App() {
               }
             />
             <Route path="/providers" element={<Providers />} />
+            <Route path="/settings" element={<SettingsPage />}>
+              <Route index element={<AboutSection />} />
+              <Route path="about" element={<AboutSection />} />
+            </Route>
             <Route path="/projects/:id" element={<LegacyProjectRouteRedirect />} />
             <Route path="*" element={<Navigate to="/code" replace />} />
           </Routes>

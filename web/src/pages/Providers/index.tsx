@@ -163,6 +163,14 @@ function iconLabel(src: string): string {
 
 const providerPresets: ProviderPreset[] = [
   {
+    id: 'routin',
+    name: 'Routin',
+    icon: '/icon/routin.ico',
+    baseUrl: 'https://api.routin.ai/v1',
+    homepage: 'https://routin.ai/dashboard/api-keys',
+    description: 'AI 助手平台，提供智能对话和代码生成服务，最低 0.2￥=1美刀可以使用Codex。',
+  },
+  {
     id: 'openai',
     name: 'OpenAI',
     icon: '/icon/openai.svg',
@@ -1058,6 +1066,7 @@ export default function Providers() {
                         : 'hover:bg-accent/50',
                     )}
                     onClick={() => setSelectedKey(item.key)}
+                    title={item.preset?.description ?? item.provider?.name}
                   >
                     <span className="grid size-7 place-items-center rounded-md border bg-background text-foreground">
                       <ProviderLogo src={item.icon} className="size-4" />

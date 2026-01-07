@@ -627,8 +627,11 @@ export function TokenUsageColumnChart({
     [cached, input, output, reasoning],
   )
 
+  // 确保 Y 轴域值合理,避免所有值为 0 时的显示问题
   const max = useMemo(() => {
-    return segments.reduce((acc, s) => Math.max(acc, s.value), 0)
+    const maxValue = segments.reduce((acc, s) => Math.max(acc, s.value), 0)
+    // 至少返回 1,避免域值为 [0, 0] 导致的渲染问题
+    return Math.max(maxValue, 1)
   }, [segments])
 
   const total = useMemo(() => {
@@ -645,21 +648,37 @@ export function TokenUsageColumnChart({
 
   const tooltipPortal = getTooltipPortal()
 
-  return (
-    <div className={cn('space-y-2', className)}>
-      <div className="flex items-baseline justify-between gap-3">
-        <div className="text-xs text-muted-foreground">Token（按类型）</div>
-        <div className="text-xs font-medium tabular-nums">
-          {formatCompactNumber(total)}
+  // 如果没有数据,显示占位符
+  if (total === 0) {
+    return (
+      <div className={cn('space-y-2', className)}>
+        <div className="flex h-24 w-full items-center justify-center rounded-md bg-muted/20 text-xs text-muted-foreground ring-1 ring-border/50">
+          暂无数据
         </div>
       </div>
+    )
+  }
 
+  return (
+    <div className={cn('space-y-2', className)}>
       <div className="space-y-1">
-        <div className="h-24 w-full rounded-md bg-muted/20 px-2 ring-1 ring-border/50">
+        <div className="relative h-24 w-full rounded-md bg-muted/20 ring-1 ring-border/50">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData} margin={{ top: 8, right: 0, bottom: 0, left: 0 }}>
-              <XAxis dataKey="key" hide />
-              <YAxis hide domain={[0, Math.max(0, max)]} />
+            <BarChart
+              data={chartData}
+              margin={{ top: 12, right: 0, bottom: 4, left: 0 }}
+              barSize={32}
+            >
+              <XAxis
+                dataKey="key"
+                hide
+                type="category"
+              />
+              <YAxis
+                hide
+                domain={[0, max]}
+                type="number"
+              />
               <RechartsTooltip
                 portal={tooltipPortal}
                 cursor={false}
@@ -710,8 +729,11 @@ export function TokenUsageColumnChart({
                     const n = typeof value === 'number' ? value : Number(value)
                     return Number.isFinite(n) && n > 0 ? formatCompactNumber(n) : ''
                   }}
-                  className="fill-foreground"
-                  fontSize={11}
+                  style={{
+                    fontSize: '11px',
+                    fill: 'var(--foreground)',
+                    fontWeight: 500,
+                  }}
                 />
               </Bar>
             </BarChart>
@@ -722,7 +744,7 @@ export function TokenUsageColumnChart({
           {segments.map((seg) => (
             <div key={seg.key} className="flex items-baseline justify-between gap-2">
               <div className="text-[11px] text-muted-foreground">{seg.label}</div>
-              <div className="text-[11px] tabular-nums">{formatCompactNumber(seg.value)}</div>
+              <div className="text-[11px] tabular-nums font-medium">{formatCompactNumber(seg.value)}</div>
             </div>
           ))}
         </div>

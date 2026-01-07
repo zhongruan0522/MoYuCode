@@ -31,9 +31,9 @@ import { Spinner } from '@/components/ui/spinner'
 import {
   FileText,
   Folder,
-  PanelRightClose,
   PanelRightOpen,
   Terminal,
+  X,
 } from 'lucide-react'
 import type { CodeSelection } from '@/lib/chatPromptXml'
 
@@ -121,11 +121,16 @@ export type ProjectWorkspaceHandle = {
   openFile: (path: string) => void
   openProjectSummary: () => void
   openTerminal: (opts?: { path?: string; focus?: boolean }) => void
+  toggleRightPanel: () => void
+  isRightPanelOpen: boolean
 }
 
 type ProjectWorkspacePageProps = {
   projectId?: string
   currentToolType?: 'Codex' | 'ClaudeCode' | null
+  sessionId?: string | null
+  rightPanelOpen?: boolean
+  onRightPanelOpenChange?: (open: boolean) => void
 }
 
 function formatDurationMs(durationMs: number): string {
@@ -496,7 +501,13 @@ function ProjectSummaryPanel({ project }: { project: ProjectDto }) {
 }
 
 export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWorkspacePageProps>(
-  function ProjectWorkspacePage({ projectId, currentToolType }: ProjectWorkspacePageProps, ref) {
+  function ProjectWorkspacePage({
+    projectId,
+    currentToolType,
+    sessionId,
+    rightPanelOpen: externalRightPanelOpen,
+    onRightPanelOpenChange
+  }: ProjectWorkspacePageProps, ref) {
   const { id: routeId } = useParams()
   const [searchParams] = useSearchParams()
   const id =
@@ -507,7 +518,7 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
     undefined
 
   const [project, setProject] = useState<ProjectDto | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const [toolsPanelOpen, setToolsPanelOpen] = useState(true)
@@ -518,6 +529,26 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
   const workspaceBodyRef = useRef<HTMLDivElement | null>(null)
   const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const [resizing, setResizing] = useState(false)
+
+  // 左右面板独立控制状态
+  const [leftPanelOpen, setLeftPanelOpen] = useState(true) // 左侧聊天面板
+  const [internalRightPanelOpen, setInternalRightPanelOpen] = useState(false) // 右侧工作区面板，默认关闭
+
+  // 使用外部状态或内部状态
+  const rightPanelOpen = externalRightPanelOpen ?? internalRightPanelOpen
+  const handleRightPanelOpenChange = useCallback((open: boolean) => {
+    if (onRightPanelOpenChange) {
+      onRightPanelOpenChange(open)
+    } else {
+      setInternalRightPanelOpen(open)
+    }
+  }, [onRightPanelOpenChange])
+
+  // 左右面板宽度相关状态
+  const [leftPanelWidth, setLeftPanelWidth] = useState(0.5) // 默认 50%
+  const [resizingPanels, setResizingPanels] = useState(false)
+  const panelsResizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null)
+  const workspaceContainerRef = useRef<HTMLDivElement | null>(null)
 
   const [tabs, setTabs] = useState<WorkspaceTab[]>([])
   const [activeView, setActiveView] = useState<WorkspaceView>({ kind: 'empty' })
@@ -703,10 +734,17 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
     [workspacePath],
   )
 
+  const ensureRightPanelOpen = useCallback(() => {
+    if (!rightPanelOpen) {
+      handleRightPanelOpenChange(true)
+    }
+  }, [rightPanelOpen, handleRightPanelOpenChange])
+
   const openFile = useCallback(
     (path: string) => {
       const normalized = path.trim()
       if (!normalized) return
+      ensureRightPanelOpen()
       setToolsPanelOpen(true)
 
       setTabs((prev) => {
@@ -722,13 +760,14 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
         void fetchPreview(normalized)
       }
     },
-    [fetchPreview, filePreviewByPath],
+    [ensureRightPanelOpen, fetchPreview, filePreviewByPath],
   )
 
   const openDiff = useCallback(
     (file: string, opts?: { staged?: boolean }) => {
       const normalized = file.trim()
       if (!normalized) return
+      ensureRightPanelOpen()
       setToolsPanelOpen(true)
 
       const staged = Boolean(opts?.staged)
@@ -748,10 +787,11 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
         void fetchDiff(normalized, staged)
       }
     },
-    [diffPreviewByFile, fetchDiff],
+    [diffPreviewByFile, ensureRightPanelOpen, fetchDiff],
   )
 
   const openProjectSummary = useCallback(() => {
+    ensureRightPanelOpen()
     setToolsPanelOpen(true)
     setTabs((prev) => {
       const exists = prev.some((t) => t.kind === 'panel' && t.panelId === 'project-summary')
@@ -759,7 +799,7 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
       return [...prev, { kind: 'panel', panelId: 'project-summary' }]
     })
     setActiveView({ kind: 'panel', panelId: 'project-summary' })
-  }, [])
+  }, [ensureRightPanelOpen])
 
   const updateFileDraft = useCallback((path: string, draft: string) => {
     setFilePreviewByPath((prev) => {
@@ -895,6 +935,7 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
     (opts?: { path?: string; focus?: boolean }) => {
       const cwd = (opts?.path ?? workspacePath).trim()
       if (!cwd) return
+      ensureRightPanelOpen()
 
       const id = createTerminalId()
       const tab: WorkspaceTab = { kind: 'terminal', id, cwd }
@@ -910,7 +951,7 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
         window.setTimeout(() => terminalSessionsRef.current[id]?.focus(), 0)
       }
     },
-    [createTerminalId, workspacePath],
+    [createTerminalId, ensureRightPanelOpen, workspacePath],
   )
 
   useImperativeHandle(
@@ -919,8 +960,10 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
       openFile,
       openProjectSummary,
       openTerminal,
+      toggleRightPanel: () => handleRightPanelOpenChange(!rightPanelOpen),
+      isRightPanelOpen: rightPanelOpen,
     }),
-    [openFile, openProjectSummary, openTerminal],
+    [openFile, openProjectSummary, openTerminal, rightPanelOpen, handleRightPanelOpenChange],
   )
 
   const closeTab = useCallback(
@@ -1024,6 +1067,45 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
   const stopResize = useCallback(() => {
     resizeStateRef.current = null
     setResizing(false)
+  }, [])
+
+  // 左右面板拖拽调整宽度
+  const startPanelsResize = useCallback((e: PointerEvent<HTMLDivElement>) => {
+    const container = workspaceContainerRef.current
+    if (!container) return
+
+    const rect = container.getBoundingClientRect()
+    const currentLeftWidth = rect.width * leftPanelWidth
+    panelsResizeStateRef.current = { startX: e.clientX, startWidth: currentLeftWidth }
+    setResizingPanels(true)
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }, [leftPanelWidth])
+
+  const movePanelsResize = useCallback((e: PointerEvent<HTMLDivElement>) => {
+    if (!resizingPanels) return
+    const state = panelsResizeStateRef.current
+    const container = workspaceContainerRef.current
+    if (!state || !container) return
+
+    const rect = container.getBoundingClientRect()
+    const delta = e.clientX - state.startX
+    const newLeftWidth = state.startWidth + delta
+    const minLeftWidth = 300 // 最小左侧宽度
+    const minRightWidth = 360 // 最小右侧宽度
+
+    // 计算新的百分比
+    let newPercentage = newLeftWidth / rect.width
+    // 限制最小值
+    const maxPercentage = 1 - (minRightWidth / rect.width)
+    const minPercentage = minLeftWidth / rect.width
+    newPercentage = Math.max(minPercentage, Math.min(maxPercentage, newPercentage))
+
+    setLeftPanelWidth(newPercentage)
+  }, [resizingPanels])
+
+  const stopPanelsResize = useCallback(() => {
+    panelsResizeStateRef.current = null
+    setResizingPanels(false)
   }, [])
 
   type WorkspaceMainTab = WorkspaceTab & TabStripItemBase
@@ -1480,34 +1562,64 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
           {error}
         </div>
       ) : null}
+      <div
+        ref={workspaceContainerRef}
+        className={cn('min-h-0 flex-1 overflow-hidden flex', (leftPanelOpen && rightPanelOpen) ? 'gap-0' : '')}
+      >
+        {/* 左侧聊天面板 */}
+        {leftPanelOpen && project && (
+          <>
+            <section
+              className={cn(
+                'min-h-0 overflow-hidden flex flex-col transition-all duration-300 ease-in-out',
+                rightPanelOpen ? 'shrink-0' : 'flex-1',
+              )}
+              style={rightPanelOpen ? { width: `${leftPanelWidth * 100}%` } : undefined}
+            >
+              <div style={{
+                height:'100%'
+              }} className="min-h-0 flex-1 overflow-hidden">
+                <ProjectChat
+                  key={`${project.id}:${sessionId ?? 'new'}`}
+                  project={project}
+                  detailsOpen={detailsOpen}
+                  detailsPortalTarget={detailsPortalTarget}
+                  activeFilePath={activeView.kind === 'file' ? activeView.path : null}
+                  codeSelection={codeSelection}
+                  onClearCodeSelection={() => setCodeSelection(null)}
+                  currentToolType={currentToolType}
+                  sessionId={sessionId}
+                />
+              </div>
+            </section>
 
-      <div className={cn('min-h-0 flex-1 overflow-hidden flex', toolsPanelOpen ? 'gap-4' : '')}>
-        <section
+            {/* 可拖拽的分隔线 - 仅在两个面板都打开时显示 */}
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              className={cn(
+                'w-1 shrink-0 cursor-col-resize bg-border/30 hover:bg-border/60 transition-opacity duration-300 ease-in-out',
+                resizingPanels ? 'bg-border' : '',
+                !rightPanelOpen ? 'opacity-0 pointer-events-none' : 'opacity-100',
+              )}
+              onPointerDown={startPanelsResize}
+              onPointerMove={movePanelsResize}
+              onPointerUp={stopPanelsResize}
+              onPointerCancel={stopPanelsResize}
+            />
+          </>
+        )}
+
+        {/* 右侧工作区面板 */}
+        <aside
           className={cn(
-            'min-h-0 overflow-hidden rounded-lg border bg-card flex flex-col',
-            toolsPanelOpen ? 'w-[620px] shrink-0' : 'flex-1',
+            'min-w-0 overflow-hidden rounded-lg border bg-card flex flex-col transition-all duration-300 ease-in-out',
+            // 平滑的展开/收起动画
+            rightPanelOpen && project
+              ? 'flex-1 opacity-100'
+              : 'flex-0 opacity-0 w-0 border-0',
           )}
         >
-          {project ? (
-            <ProjectChat
-              key={project.id}
-              project={project}
-              detailsOpen={detailsOpen}
-              detailsPortalTarget={detailsPortalTarget}
-              activeFilePath={activeView.kind === 'file' ? activeView.path : null}
-              codeSelection={codeSelection}
-              onClearCodeSelection={() => setCodeSelection(null)}
-              currentToolType={currentToolType}
-            />
-          ) : (
-            <div className="min-h-0 flex-1 overflow-hidden p-4 text-sm text-muted-foreground">
-              {loading ? '加载中…' : '未找到项目。'}
-            </div>
-          )}
-        </section>
-
-        {toolsPanelOpen && project ? (
-          <aside className="min-w-0 flex-1 overflow-hidden rounded-lg border bg-card flex flex-col">
             <div className="flex items-center justify-between gap-2 border-b px-2 py-1.5">
               <div className="flex items-center gap-1">
                 {!fileManagerOpen ? (
@@ -1547,10 +1659,10 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
                 type="button"
                 variant="ghost"
                 size="icon-sm"
-                title="收起工具栏"
-                onClick={() => setToolsPanelOpen(false)}
+                title="收起工作区面板"
+                onClick={() => handleRightPanelOpenChange(false)}
               >
-                <PanelRightClose className="size-4" />
+                <X className="size-4" />
               </Button>
             </div>
 
@@ -1617,23 +1729,22 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
               </div>
             </div>
           </aside>
-        ) : null}
       </div>
 
-      <Button
-        type="button"
-        variant="outline"
-        size="icon"
-        className={cn(
-          'fixed right-4 top-4 z-40 shadow-md transition-[opacity,transform] duration-200 ease-out',
-          toolsPanelOpen ? 'pointer-events-none translate-y-1 opacity-0 scale-95' : 'opacity-100',
-        )}
-        title="展开工具栏"
-        onClick={() => setToolsPanelOpen(true)}
-      >
-        <PanelRightOpen className="size-4" />
-        <span className="sr-only">展开工具栏</span>
-      </Button>
+      {/* 展开左侧按钮 - 当左侧面板收起时显示 */}
+      {!leftPanelOpen && (
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="fixed left-4 top-4 z-40 shadow-md"
+          title="展开聊天面板"
+          onClick={() => setLeftPanelOpen(true)}
+        >
+          <PanelRightOpen className="size-4" />
+          <span className="sr-only">展开聊天面板</span>
+        </Button>
+      )}
     </div>
   )
   },

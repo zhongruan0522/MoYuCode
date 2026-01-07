@@ -16,7 +16,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { api } from '@/api/client'
-import type { ProjectDto, ProviderDto, ToolType } from '@/api/types'
+import type { ProjectDto, ProjectSessionMessageDto, ProviderDto, ToolType } from '@/api/types'
 import type { CodeSelection, WorkspaceFileRef } from '@/lib/chatPromptXml'
 import { buildUserPromptWithWorkspaceContext } from '@/lib/chatWorkspaceContextXml'
 import { cn } from '@/lib/utils'
@@ -190,6 +190,8 @@ type DraftImage = {
 
 const maxDraftImages = 8
 const maxDraftImageBytes = 10 * 1024 * 1024
+const sessionHistoryPageSize = 30
+const sessionHistoryLoadThresholdPx = 96
 
 async function uploadImage(
   apiBase: string,
@@ -304,6 +306,15 @@ function truncateInlineText(value: string, maxChars = 140): string {
 
 function normalizeNewlines(value: string): string {
   return (value ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+}
+
+function hashString(value: string): string {
+  let hash = 2166136261
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(16)
 }
 
 function tryExtractFirstJsonValueSlice(
@@ -534,17 +545,36 @@ function tryParseEditToolInput(input: string): {
   return { filePath, oldString, newString, replaceAll }
 }
 
-function tryParseReadToolInput(input: string): { filePath: string } | null {
+type ReadToolInput = {
+  filePath: string
+  content?: string
+}
+
+function tryParseReadToolInput(input: string): ReadToolInput | null {
   const obj = tryParseJsonRecord(input)
   if (!obj) return null
   const args = unwrapToolArgsRecord(obj)
 
+  const fileValue = args.file
+  let filePathFromFile: string | null = null
+  let contentFromFile: string | null = null
+  if (fileValue && typeof fileValue === 'object' && !Array.isArray(fileValue)) {
+    const fileObj = fileValue as Record<string, unknown>
+    filePathFromFile =
+      readFirstNonEmptyString(fileObj, ['file_path', 'filePath', 'path']) ??
+      readFirstNonEmptyString(fileObj, ['file', 'target', 'targetPath'])
+    contentFromFile = readFirstString(fileObj, ['content', 'text'])
+  }
+
   const filePath =
+    filePathFromFile ??
     readFirstNonEmptyString(args, ['file_path', 'filePath', 'path']) ??
     readFirstNonEmptyString(args, ['file', 'target', 'targetPath'])
 
   if (!filePath) return null
-  return { filePath }
+
+  const content = contentFromFile ?? readFirstString(args, ['content', 'text'])
+  return { filePath, content: content ?? undefined }
 }
 
 type TodoWriteStatus = 'pending' | 'in_progress' | 'completed'
@@ -1921,6 +1951,9 @@ const ChatToolCallItem = memo(function ChatToolCallItem({
 
   const readCode = useMemo(() => {
     if (!readInput) return null
+    if (readInput.content != null) {
+      return normalizeReadToolOutputForMonaco(readInput.content)
+    }
     const extracted = tryExtractReadToolOutput(output)
     return normalizeReadToolOutputForMonaco(extracted ?? output)
   }, [output, readInput])
@@ -2540,6 +2573,7 @@ export function ProjectChat({
   onClearCodeSelection,
   onToolOutput,
   currentToolType,
+  sessionId,
 }: {
   project: ProjectDto
   detailsOpen: boolean
@@ -2549,13 +2583,26 @@ export function ProjectChat({
   onClearCodeSelection?: () => void
   onToolOutput?: (chunk: string) => void
   currentToolType?: 'Codex' | 'ClaudeCode' | null
+  sessionId?: string | null
 }) {
   const apiBase = useMemo(() => getApiBase(), [])
-  const sessionIdRef = useRef<string>(createUuid())
+  const sessionIdRef = useRef<string>(sessionId ?? createUuid())
   const workspacePath = project.workspacePath.trim()
 
   const location = useLocation(); // 2. 获取当前 location 对象
+
+  useEffect(() => {
+    if (sessionId) {
+      sessionIdRef.current = sessionId
+    }
+  }, [sessionId])
+
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const [historyCursor, setHistoryCursor] = useState<number | null>(null)
+  const [historyHasMore, setHistoryHasMore] = useState(false)
+  const [historyInitialized, setHistoryInitialized] = useState(false)
   const [draft, setDraft] = useState('')
   const [draftImages, setDraftImages] = useState<DraftImage[]>([])
   const [todoDockOpen, setTodoDockOpen] = useState(false)
@@ -2593,6 +2640,8 @@ export function ProjectChat({
   } | null>(null)
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const suppressAutoScrollRef = useRef(false)
+  const historyLoadingRef = useRef(false)
   const composerOverlayRef = useRef<HTMLDivElement | null>(null)
   const [composerOverlayHeightPx, setComposerOverlayHeightPx] = useState(0)
   const abortRef = useRef<AbortController | null>(null)
@@ -2680,6 +2729,10 @@ export function ProjectChat({
 
   useEffect(() => {
     if (!scrollRef.current) return
+    if (suppressAutoScrollRef.current) {
+      suppressAutoScrollRef.current = false
+      return
+    }
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages])
 
@@ -2715,6 +2768,144 @@ export function ProjectChat({
       el.scrollTop = el.scrollHeight
     }
   }, [scrollBottomPaddingPx])
+
+  const mapSessionMessage = useCallback((message: ProjectSessionMessageDto): ChatMessage => {
+    const roleRaw = (message.role ?? '').toLowerCase()
+    const kindRaw = (message.kind ?? '').toLowerCase()
+    const role: ChatRole =
+      roleRaw === 'user' ? 'user' : roleRaw === 'system' ? 'system' : 'agent'
+    const kind: ChatMessageKind =
+      kindRaw === 'tool' ? 'tool' : kindRaw === 'think' ? 'think' : 'text'
+
+    const fingerprint = [
+      role,
+      kind,
+      message.timestampUtc ?? '',
+      message.toolUseId ?? '',
+      message.toolName ?? '',
+      message.toolInput ?? '',
+      message.toolOutput ?? '',
+      message.toolIsError ? '1' : '0',
+      normalizeNewlines(message.text ?? ''),
+    ].join('|')
+    const id = `history-${hashString(fingerprint)}`
+
+    const next: ChatMessage = {
+      id,
+      role,
+      kind,
+      text: message.text ?? '',
+    }
+
+    if (message.toolName) next.toolName = message.toolName
+    if (message.toolUseId) next.toolUseId = message.toolUseId
+    if (message.toolInput) next.toolInput = message.toolInput
+    if (message.toolOutput) next.toolOutput = message.toolOutput
+    if (message.toolIsError) next.toolIsError = message.toolIsError
+
+    return next
+  }, [])
+
+  const loadSessionMessages = useCallback(
+    async (opts?: { before?: number | null; prepend?: boolean }) => {
+      if (!sessionId) return
+      if (historyLoadingRef.current) return
+
+      historyLoadingRef.current = true
+      setHistoryLoading(true)
+      setHistoryError(null)
+
+      const before = opts?.before ?? null
+      const prepend = Boolean(opts?.prepend)
+      const scrollSnapshot =
+        prepend && scrollRef.current
+          ? {
+              height: scrollRef.current.scrollHeight,
+              top: scrollRef.current.scrollTop,
+            }
+          : null
+
+      try {
+        const page = await api.projects.sessionMessages(project.id, sessionId, {
+          before: before ?? undefined,
+          limit: sessionHistoryPageSize,
+        })
+        const mapped = page.messages.map(mapSessionMessage)
+        const uniqueMap = new Map<string, ChatMessage>()
+        for (const msg of mapped) {
+          if (!uniqueMap.has(msg.id)) uniqueMap.set(msg.id, msg)
+        }
+        const deduped = Array.from(uniqueMap.values())
+
+        if (prepend) {
+          if (deduped.length) {
+            suppressAutoScrollRef.current = true
+            setMessages((prev) => {
+              if (!prev.length) return deduped
+              const existing = new Set(prev.map((m) => m.id))
+              const unique = deduped.filter((m) => !existing.has(m.id))
+              return unique.length ? [...unique, ...prev] : prev
+            })
+          }
+        } else {
+          setMessages(deduped)
+        }
+
+        setHistoryCursor(page.nextCursor ?? null)
+        setHistoryHasMore(page.hasMore)
+        setHistoryInitialized(true)
+
+        if (prepend && scrollSnapshot && typeof window !== 'undefined') {
+          window.requestAnimationFrame(() => {
+            const el = scrollRef.current
+            if (!el) return
+            const delta = el.scrollHeight - scrollSnapshot.height
+            el.scrollTop = scrollSnapshot.top + delta
+          })
+        }
+      } catch (e) {
+        setHistoryError((e as Error).message)
+      } finally {
+        historyLoadingRef.current = false
+        setHistoryLoading(false)
+      }
+    },
+    [mapSessionMessage, project.id, sessionId],
+  )
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (!sessionId) return
+    if (!historyHasMore || historyCursor == null) return
+    if (historyLoadingRef.current) return
+    if (el.scrollTop > sessionHistoryLoadThresholdPx) return
+
+    void loadSessionMessages({ before: historyCursor, prepend: true })
+  }, [historyCursor, historyHasMore, loadSessionMessages, sessionId])
+
+  useEffect(() => {
+    if (!sessionId) {
+      setHistoryCursor(null)
+      setHistoryHasMore(false)
+      setHistoryError(null)
+      setHistoryLoading(false)
+      setHistoryInitialized(false)
+      return
+    }
+
+    setMessages([])
+    setThinkOpenById({})
+    setToolOpenById({})
+    setTokenByMessageId({})
+    setHistoryCursor(null)
+    setHistoryHasMore(false)
+    setHistoryError(null)
+    setHistoryInitialized(false)
+    historyLoadingRef.current = false
+
+    void loadSessionMessages()
+  }, [loadSessionMessages, sessionId])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -4020,7 +4211,9 @@ export function ProjectChat({
   return (
     <TooltipProvider openDelay={120} closeDelay={60}>
       <>
-        <section className="relative min-w-0 flex-1 overflow-hidden flex flex-col">
+        <section style={{
+          height: '100%'
+        }} className="relative min-w-0 flex-1 overflow-hidden flex flex-col">
         {chatError ? (
           <div className="border-b bg-destructive/10 px-4 py-2 text-sm text-destructive">
             {chatError}
@@ -4029,16 +4222,37 @@ export function ProjectChat({
 
         <div
           ref={scrollRef}
+          onScroll={handleScroll}
           className="flex-1 min-h-0 overflow-y-auto px-4 pt-6"
-          style={{ paddingBottom: scrollBottomPaddingPx }}
+          style={{ paddingBottom: scrollBottomPaddingPx, scrollbarGutter: 'stable' }}
         >
-          {messages.length ? null : (
+          {messages.length ? null : sessionId && historyLoading ? null : (
             <div className="flex h-full min-h-[160px] items-center justify-center text-center">
               <div className="max-w-sm text-sm text-muted-foreground">
                 在这里开始对话：输入问题或指令。
               </div>
             </div>
           )}
+
+          {sessionId && historyLoading ? (
+            <div className="mb-3 flex items-center justify-center text-xs text-muted-foreground">
+              <span className="inline-flex items-center gap-2">
+                <Spinner className="size-3" /> 加载会话记录中…
+              </span>
+            </div>
+          ) : null}
+
+          {historyError ? (
+            <div className="mb-3 text-xs text-destructive">
+              加载会话记录失败：{historyError}
+            </div>
+          ) : null}
+
+          {sessionId && historyInitialized && !historyHasMore && messages.length ? (
+            <div className="mb-3 text-center text-[11px] text-muted-foreground">
+              已加载全部记录
+            </div>
+          ) : null}
 
             <ChatMessageList
               messages={messages}

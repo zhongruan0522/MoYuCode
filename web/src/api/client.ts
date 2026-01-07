@@ -7,6 +7,7 @@ import type {
   ListEntriesResponse,
   ProjectDto,
   ProjectSessionDto,
+  ProjectSessionMessagesPageDto,
   ProjectUpsertRequest,
   CodexDailyTokenUsageDto,
   SessionTokenUsageDto,
@@ -18,6 +19,8 @@ import type {
   ProviderUpsertRequest,
   ToolKey,
   ToolStatusDto,
+  ToolEnvironmentDto,
+  ToolEnvironmentUpdateRequest,
   ToolType,
   ReadFileResponse,
   GitCommitRequest,
@@ -33,6 +36,8 @@ import type {
   GitStatusResponse,
   GitUnstageRequest,
   WriteFileRequest,
+  ProjectEnvironmentDto,
+  ProjectEnvironmentUpdateRequest,
 } from '@/api/types'
 
 const API_BASE =''
@@ -97,6 +102,13 @@ export const api = {
     status: (tool: ToolKey) => http<ToolStatusDto>(`/api/tools/${tool}/status`),
     install: (tool: ToolKey) => http<JobDto>(`/api/tools/${tool}/install`, { method: 'POST' }),
     installNode: () => http<JobDto>(`/api/tools/node/install`, { method: 'POST' }),
+    environment: (tool: ToolKey) =>
+      http<ToolEnvironmentDto>(`/api/tools/${tool}/environment`),
+    updateEnvironment: (tool: ToolKey, body: ToolEnvironmentUpdateRequest) =>
+      http<ToolEnvironmentDto>(`/api/tools/${tool}/environment`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
     codexTokenUsage: (forceRefresh = false) =>
       http<SessionTokenUsageDto>(
         `/api/tools/codex/token-usage${forceRefresh ? '?forceRefresh=true' : ''}`,
@@ -145,7 +157,29 @@ export const api = {
       http<ProjectDto>(`/api/projects/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
     delete: (id: string) => http<void>(`/api/projects/${id}`, { method: 'DELETE' }),
     start: (id: string) => http<void>(`/api/projects/${id}/start`, { method: 'POST' }),
+    environment: (id: string) =>
+      http<ProjectEnvironmentDto>(`/api/projects/${id}/environment`),
+    updateEnvironment: (id: string, body: ProjectEnvironmentUpdateRequest) =>
+      http<ProjectEnvironmentDto>(`/api/projects/${id}/environment`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
     sessions: (id: string) => http<ProjectSessionDto[]>(`/api/projects/${id}/sessions`),
+    sessionMessages: (
+      id: string,
+      sessionId: string,
+      opts?: { before?: number | null; limit?: number },
+    ) => {
+      const sp = new URLSearchParams()
+      if (opts?.before != null) sp.set('before', String(opts.before))
+      if (opts?.limit != null) sp.set('limit', String(opts.limit))
+      const query = sp.toString()
+      const encodedSessionId = encodeURIComponent(sessionId)
+      const suffix = query ? `?${query}` : ''
+      return http<ProjectSessionMessagesPageDto>(
+        `/api/projects/${id}/sessions/${encodedSessionId}/messages${suffix}`,
+      )
+    },
     scanCodexSessions: (toolType: ToolType) =>
       new EventSource(
         `${API_BASE}/api/projects/scan-codex-sessions?toolType=${encodeURIComponent(toolType)}`,

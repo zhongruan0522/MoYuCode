@@ -34,6 +34,13 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
 import { ProjectWorkspacePage, type ProjectWorkspaceHandle } from '@/pages/ProjectWorkspacePage'
 import { FileText, Folder, RefreshCw, Terminal, X } from 'lucide-react'
@@ -97,6 +104,54 @@ function getCodePageConfig(mode: CodePageMode): CodePageConfig {
     openConfigLabel: '打开 config.toml',
   }
 }
+
+const toolKeyByType: Record<ToolType, ToolKey> = {
+  Codex: 'codex',
+  ClaudeCode: 'claude',
+}
+
+const toolLabelByType: Record<ToolType, string> = {
+  Codex: 'Codex',
+  ClaudeCode: 'Claude Code',
+}
+
+const codexEnvironmentKeys = ['OPENAI_API_KEY'] as const
+
+const claudeEnvironmentKeys = [
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_SMALL_FAST_MODEL',
+  'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL',
+  'ANTHROPIC_MODEL',
+  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+] as const
+
+const environmentKeysByTool: Record<ToolType, readonly string[]> = {
+  Codex: codexEnvironmentKeys,
+  ClaudeCode: claudeEnvironmentKeys,
+}
+
+const environmentDescriptionsByTool: Record<ToolType, Record<string, string>> = {
+  Codex: {
+    OPENAI_API_KEY: 'OpenAI API Key，用于 Codex 访问模型服务。',
+  },
+  ClaudeCode: {
+    ANTHROPIC_AUTH_TOKEN: 'Claude Code 授权令牌（来自 claude login）。',
+    ANTHROPIC_BASE_URL: 'Anthropic 兼容接口地址，例如 https://api.anthropic.com。',
+    ANTHROPIC_SMALL_FAST_MODEL: '小模型/快速模型名称（用于轻量任务）。',
+    ANTHROPIC_DEFAULT_SONNET_MODEL: '默认 Sonnet 模型名称。',
+    ANTHROPIC_DEFAULT_OPUS_MODEL: '默认 Opus 模型名称。',
+    ANTHROPIC_MODEL: '强制指定默认模型（优先级最高）。',
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: '默认 Haiku 模型名称。',
+  },
+}
+
+const getEnvironmentDescription = (toolType: ToolType, key: string) =>
+  environmentDescriptionsByTool[toolType]?.[key] ?? ''
+
+const canSelectToolEnvironment = (config: CodePageConfig) =>
+  config.toolTypes.length > 1 && config.primaryToolType !== 'Codex'
 
 type SessionsCacheEntry = {
   cachedAt: number
@@ -229,9 +284,17 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
   const [pickerMenuState, setPickerMenuState] = useState<'open' | 'closed'>('closed')
 
   const [projectMenu, setProjectMenu] = useState<{ x: number; y: number } | null>(null)
-  const closeProjectMenu = useCallback(() => setProjectMenu(null), [])
+  const [projectMenuTarget, setProjectMenuTarget] = useState<ProjectDto | null>(null)
+  const closeProjectMenu = useCallback(() => {
+    setProjectMenu(null)
+    setProjectMenuTarget(null)
+  }, [])
 
   const workspaceRef = useRef<ProjectWorkspaceHandle | null>(null)
+
+  const toggleWorkspacePanel = useCallback(() => {
+    workspaceRef.current?.toggleRightPanel()
+  }, [])
 
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false)
   const actionsAnchorRef = useRef<HTMLButtonElement | null>(null)
@@ -254,13 +317,44 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
   const [upsertTarget, setUpsertTarget] = useState<ProjectDto | null>(null)
 
   const [renameOpen, setRenameOpen] = useState(false)
+  const [renameTarget, setRenameTarget] = useState<ProjectDto | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const [renameBusy, setRenameBusy] = useState(false)
   const [renameError, setRenameError] = useState<string | null>(null)
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<ProjectDto | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  const [environmentOpen, setEnvironmentOpen] = useState(false)
+  const [environmentToolType, setEnvironmentToolType] = useState<ToolType>(
+    config.primaryToolType,
+  )
+  const [toolEnvironmentDraft, setToolEnvironmentDraft] = useState<
+    Record<string, string>
+  >({})
+  const [projectEnvironmentDraft, setProjectEnvironmentDraft] = useState<
+    Record<string, string>
+  >({})
+  const [toolEnvironmentLoading, setToolEnvironmentLoading] = useState(false)
+  const [projectEnvironmentLoading, setProjectEnvironmentLoading] =
+    useState(false)
+  const [toolEnvironmentSaving, setToolEnvironmentSaving] = useState(false)
+  const [projectEnvironmentSaving, setProjectEnvironmentSaving] =
+    useState(false)
+  const [toolEnvironmentError, setToolEnvironmentError] = useState<
+    string | null
+  >(null)
+  const [projectEnvironmentError, setProjectEnvironmentError] = useState<
+    string | null
+  >(null)
+  const [toolEnvironmentHint, setToolEnvironmentHint] = useState<string | null>(
+    null,
+  )
+  const [projectEnvironmentHint, setProjectEnvironmentHint] = useState<
+    string | null
+  >(null)
 
   const closePicker = useCallback(() => setPickerOpen(false), [])
 
@@ -582,9 +676,153 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [sessionsError, setSessionsError] = useState<string | null>(null)
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
+  const [loadedSessionId, setLoadedSessionId] = useState<string | null>(null)
   const [copyResumeHint, setCopyResumeHint] = useState<string | null>(null)
 
   const selectedProjectId = selectedProject?.id ?? null
+
+  const buildEnvironmentDraft = useCallback(
+    (toolType: ToolType, environment?: Record<string, string> | null) => {
+      const keys = environmentKeysByTool[toolType]
+      const draft: Record<string, string> = {}
+      for (const key of keys) {
+        draft[key] = environment?.[key] ?? ''
+      }
+      return draft
+    },
+    [],
+  )
+
+  const loadToolEnvironment = useCallback(
+    async (toolType: ToolType) => {
+      setToolEnvironmentLoading(true)
+      setToolEnvironmentError(null)
+      try {
+        const data = await api.tools.environment(toolKeyByType[toolType])
+        setToolEnvironmentDraft(buildEnvironmentDraft(toolType, data.environment))
+      } catch (e) {
+        setToolEnvironmentError((e as Error).message)
+        setToolEnvironmentDraft(buildEnvironmentDraft(toolType, null))
+      } finally {
+        setToolEnvironmentLoading(false)
+      }
+    },
+    [buildEnvironmentDraft],
+  )
+
+  const loadProjectEnvironment = useCallback(
+    async (project: ProjectDto) => {
+      setProjectEnvironmentLoading(true)
+      setProjectEnvironmentError(null)
+      try {
+        const data = await api.projects.environment(project.id)
+        setProjectEnvironmentDraft(
+          buildEnvironmentDraft(project.toolType, data.environment),
+        )
+      } catch (e) {
+        setProjectEnvironmentError((e as Error).message)
+        setProjectEnvironmentDraft(buildEnvironmentDraft(project.toolType, null))
+      } finally {
+        setProjectEnvironmentLoading(false)
+      }
+    },
+    [buildEnvironmentDraft],
+  )
+
+  const openEnvironmentEditor = useCallback(() => {
+    closeActionsMenu()
+    closeSessionsMenu()
+    closePicker()
+    closeProjectMenu()
+    setEnvironmentToolType(config.primaryToolType)
+    setEnvironmentOpen(true)
+  }, [
+    closeActionsMenu,
+    closePicker,
+    closeProjectMenu,
+    closeSessionsMenu,
+    config.primaryToolType,
+  ])
+
+  const closeEnvironmentEditor = useCallback(() => {
+    if (toolEnvironmentSaving || projectEnvironmentSaving) return
+    setEnvironmentOpen(false)
+  }, [projectEnvironmentSaving, toolEnvironmentSaving])
+
+  const updateToolEnvironmentValue = useCallback((key: string, value: string) => {
+    setToolEnvironmentDraft((prev) => ({ ...prev, [key]: value }))
+    setToolEnvironmentHint(null)
+  }, [])
+
+  const updateProjectEnvironmentValue = useCallback(
+    (key: string, value: string) => {
+      setProjectEnvironmentDraft((prev) => ({ ...prev, [key]: value }))
+      setProjectEnvironmentHint(null)
+    },
+    [],
+  )
+
+  const saveToolEnvironment = useCallback(async () => {
+    setToolEnvironmentSaving(true)
+    setToolEnvironmentError(null)
+    try {
+      const data = await api.tools.updateEnvironment(
+        toolKeyByType[environmentToolType],
+        { environment: toolEnvironmentDraft },
+      )
+      setToolEnvironmentDraft(
+        buildEnvironmentDraft(environmentToolType, data.environment),
+      )
+      setToolEnvironmentHint('已保存')
+    } catch (e) {
+      setToolEnvironmentError((e as Error).message)
+    } finally {
+      setToolEnvironmentSaving(false)
+    }
+  }, [
+    buildEnvironmentDraft,
+    environmentToolType,
+    toolEnvironmentDraft,
+  ])
+
+  const saveProjectEnvironment = useCallback(async () => {
+    if (!selectedProject) return
+    setProjectEnvironmentSaving(true)
+    setProjectEnvironmentError(null)
+    try {
+      const data = await api.projects.updateEnvironment(selectedProject.id, {
+        environment: projectEnvironmentDraft,
+      })
+      setProjectEnvironmentDraft(
+        buildEnvironmentDraft(selectedProject.toolType, data.environment),
+      )
+      setProjectEnvironmentHint('已保存')
+    } catch (e) {
+      setProjectEnvironmentError((e as Error).message)
+    } finally {
+      setProjectEnvironmentSaving(false)
+    }
+  }, [buildEnvironmentDraft, projectEnvironmentDraft, selectedProject])
+
+  useEffect(() => {
+    if (!environmentOpen) return
+    setToolEnvironmentHint(null)
+    void loadToolEnvironment(environmentToolType)
+  }, [environmentOpen, environmentToolType, loadToolEnvironment])
+
+  useEffect(() => {
+    if (!environmentOpen) return
+    setProjectEnvironmentHint(null)
+
+    if (selectedProject) {
+      void loadProjectEnvironment(selectedProject)
+      return
+    }
+
+    setProjectEnvironmentDraft({})
+    setProjectEnvironmentError(null)
+    setProjectEnvironmentLoading(false)
+  }, [environmentOpen, loadProjectEnvironment, selectedProject])
 
   useEffect(() => {
     closeSessionsMenu()
@@ -611,6 +849,10 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
           if (!current) return current
           return cached.sessions.some((s) => s.id === current) ? current : null
         })
+        setLoadedSessionId((current) => {
+          if (!current) return current
+          return cached.sessions.some((s) => s.id === current) ? current : null
+        })
         return
       }
 
@@ -621,6 +863,10 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
         sessionsCache.set(project.id, { cachedAt: Date.now(), sessions: data })
         setSessions(data)
         setSelectedSessionId((current) => {
+          if (!current) return current
+          return data.some((s) => s.id === current) ? current : null
+        })
+        setLoadedSessionId((current) => {
           if (!current) return current
           return data.some((s) => s.id === current) ? current : null
         })
@@ -641,6 +887,7 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
     if (!selectedProjectId) {
       setSessions([])
       setSelectedSessionId(null)
+      setLoadedSessionId(null)
       setSessionsError(null)
       setSessionsLoading(false)
       return
@@ -648,6 +895,7 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
 
     // 默认不选择会话；切换项目时清空选择并重新加载会话列表。
     setSelectedSessionId(null)
+    setLoadedSessionId(null)
     setSessions([])
     setSessionsError(null)
     setSessionsLoading(true)
@@ -658,6 +906,18 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
     if (!selectedSessionId) return null
     return sessions.find((s) => s.id === selectedSessionId) ?? null
   }, [selectedSessionId, sessions])
+
+  const isSelectedSessionLoaded = Boolean(
+    selectedSession && loadedSessionId === selectedSession.id,
+  )
+
+  const toggleLoadedSession = useCallback(() => {
+    if (!selectedSession) return
+    setLoadedSessionId((current) => {
+      if (current === selectedSession.id) return null
+      return selectedSession.id
+    })
+  }, [selectedSession])
 
   useEffect(() => {
     if (projectIdFromQuery) return
@@ -772,99 +1032,113 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
   ])
 
   const openProjectMenu = useCallback(
-    (e: ReactMouseEvent) => {
-      if (!selectedProject) return
+    (e: ReactMouseEvent, project: ProjectDto | null) => {
+      if (!project) return
       e.preventDefault()
       e.stopPropagation()
       closePicker()
+      closeActionsMenu()
+      closeSessionsMenu()
 
       if (typeof window === 'undefined') return
       const menuWidth = 220
       const menuHeight = 180
       const x = Math.min(e.clientX, Math.max(0, window.innerWidth - menuWidth))
       const y = Math.min(e.clientY, Math.max(0, window.innerHeight - menuHeight))
+      setProjectMenuTarget(project)
       setProjectMenu({ x, y })
     },
-    [closePicker, selectedProject],
+    [closeActionsMenu, closePicker, closeSessionsMenu],
   )
 
-  const openRename = useCallback(() => {
-    if (!selectedProject) return
-    setRenameDraft(selectedProject.name)
-    setRenameError(null)
-    setRenameBusy(false)
-    setRenameOpen(true)
-    closeProjectMenu()
-  }, [closeProjectMenu, selectedProject])
+  const openRename = useCallback(
+    (project: ProjectDto) => {
+      setRenameTarget(project)
+      setRenameDraft(project.name)
+      setRenameError(null)
+      setRenameBusy(false)
+      setRenameOpen(true)
+      closeProjectMenu()
+    },
+    [closeProjectMenu],
+  )
 
   const submitRename = useCallback(async () => {
-    if (!selectedProject) return
+    if (!renameTarget) return
     const name = renameDraft.trim()
     if (!name) {
       setRenameError('名称不能为空')
       return
     }
 
-    if (name === selectedProject.name) {
+    if (name === renameTarget.name) {
       setRenameOpen(false)
+      setRenameTarget(null)
       return
     }
 
     setRenameBusy(true)
     setRenameError(null)
     try {
-      await api.projects.update(selectedProject.id, {
-        toolType: selectedProject.toolType,
+      await api.projects.update(renameTarget.id, {
+        toolType: renameTarget.toolType,
         name,
-        workspacePath: selectedProject.workspacePath,
-        providerId: selectedProject.providerId,
-        model: selectedProject.model,
+        workspacePath: renameTarget.workspacePath,
+        providerId: renameTarget.providerId,
+        model: renameTarget.model,
       })
       setRenameOpen(false)
+      setRenameTarget(null)
       await loadProjects()
     } catch (e) {
       setRenameError((e as Error).message)
     } finally {
       setRenameBusy(false)
     }
-  }, [loadProjects, renameDraft, selectedProject])
+  }, [loadProjects, renameDraft, renameTarget])
 
-  const openEdit = useCallback(() => {
-    if (!selectedProject) return
+  const openEdit = useCallback((project: ProjectDto) => {
     closeProjectMenu()
     setUpsertMode('edit')
-    setUpsertTarget(selectedProject)
+    setUpsertTarget(project)
     setUpsertOpen(true)
-  }, [closeProjectMenu, selectedProject])
+  }, [closeProjectMenu])
 
-  const openDelete = useCallback(() => {
-    if (!selectedProject) return
+  const openDelete = useCallback((project: ProjectDto) => {
+    setDeleteTarget(project)
     setDeleteError(null)
     setDeleteBusy(false)
     setDeleteDialogOpen(true)
     closeProjectMenu()
-  }, [closeProjectMenu, selectedProject])
+  }, [closeProjectMenu])
 
   const confirmDelete = useCallback(async () => {
-    if (!selectedProject) return
+    if (!deleteTarget) return
     setDeleteBusy(true)
     setDeleteError(null)
     try {
-      await api.projects.delete(selectedProject.id)
-      clearSelection()
+      await api.projects.delete(deleteTarget.id)
+      if (selectedProject?.id === deleteTarget.id) {
+        clearSelection()
+      }
       setDeleteDialogOpen(false)
+      setDeleteTarget(null)
       await loadProjects()
     } catch (e) {
       setDeleteError((e as Error).message)
     } finally {
       setDeleteBusy(false)
     }
-  }, [clearSelection, loadProjects, selectedProject])
+  }, [clearSelection, deleteTarget, loadProjects, selectedProject])
 
   const pickerButtonLabel = useMemo(() => {
     if (selectedProject) return selectedProject.name
     return '选择项目'
   }, [selectedProject])
+
+  const canOpenMenuTerminal = Boolean(
+    selectedProject && projectMenuTarget && selectedProject.id === projectMenuTarget.id,
+  )
 
   const showProjectPickerMenu = Boolean(
     typeof document !== 'undefined' && pickerMenuMounted && pickerPos,
@@ -883,9 +1157,7 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
           setPickerOpen((v) => !v)
         }}
         onOpenMenu={(e) => {
-          closeActionsMenu()
-          closeSessionsMenu()
-          openProjectMenu(e)
+          openProjectMenu(e, selectedProject)
         }}
         sessionsAnchorRef={sessionsAnchorRef}
         sessionsOpen={sessionsMenuOpen}
@@ -893,6 +1165,7 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
         sessionsLoading={sessionsLoading}
         sessionsCount={sessions.length}
         onToggleSessions={toggleSessionsMenu}
+        onOpenEnvironment={openEnvironmentEditor}
         actionsAnchorRef={actionsAnchorRef}
         actionsOpen={actionsMenuOpen}
         onToggleActions={toggleActionsMenu}
@@ -900,6 +1173,8 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
         showScanButton={!projects.length}
         scanTooltip={config.scanTooltip}
         onScan={() => void startScan({ force: true })}
+        workspaceOpen={workspaceRef.current?.isRightPanelOpen ?? false}
+        onToggleWorkspace={toggleWorkspacePanel}
       />
 
       {error ? (
@@ -925,6 +1200,7 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
             scanCommandLabel={config.scanCommandLabel}
             scanTooltip={config.scanTooltip}
             onSelectProject={selectProject}
+            onOpenProjectMenu={(project, e) => openProjectMenu(e, project)}
             onCreateProject={openCreateProject}
             onScanProjects={() => void startScan({ force: true })}
             onStopScan={stopScan}
@@ -937,6 +1213,7 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
                 ref={workspaceRef}
                 key={selectedProject.id}
                 projectId={selectedProject.id}
+                sessionId={loadedSessionId}
               />
             </div>
           </div>
@@ -977,6 +1254,16 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
                       刷新
                       {sessionsLoading ? <Spinner /> : null}
                     </Button>
+                    {selectedSession ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={toggleLoadedSession}
+                      >
+                        {isSelectedSessionLoaded ? '取消加载' : '加载会话'}
+                      </Button>
+                    ) : null}
                     {selectedSessionId ? (
                       <Button
                         type="button"
@@ -1008,6 +1295,7 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
                     <div className="space-y-1 p-2">
                       {sessions.map((s) => {
                         const isActive = s.id === selectedSessionId
+                        const isLoaded = s.id === loadedSessionId
                         const totalTokens = sumSessionTokens(s)
                         return (
                           <button
@@ -1038,6 +1326,11 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
                                 >
                                   {formatCompactNumber(totalTokens)} Token
                                 </div>
+                                {isLoaded ? (
+                                  <div className="text-[10px] text-primary">
+                                    已加载
+                                  </div>
+                                ) : null}
                               </div>
                             </div>
                           </button>
@@ -1278,6 +1571,7 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
                           active ? 'bg-accent text-accent-foreground' : 'hover:bg-accent',
                         )}
                         onClick={() => selectProject(p.id)}
+                        onContextMenu={(e) => openProjectMenu(e, p)}
                       >
                         <Folder className={cn('mt-0.5 size-4 shrink-0', active ? 'text-inherit' : 'text-muted-foreground')} />
                         <span className="min-w-0 flex-1">
@@ -1304,7 +1598,7 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
           )
         : null}
 
-      {projectMenu && selectedProject && typeof document !== 'undefined'
+      {projectMenu && projectMenuTarget && typeof document !== 'undefined'
         ? createPortal(
             <div
               className="fixed inset-0 z-50"
@@ -1323,27 +1617,32 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
                 role="menu"
               >
                 <div className="px-3 py-2 text-xs text-muted-foreground truncate">
-                  {selectedProject.name}
+                  {projectMenuTarget.name}
                 </div>
                 <div className="h-px bg-border" />
                 <button
                   type="button"
                   className="flex w-full items-center px-3 py-2 text-sm hover:bg-accent"
-                  onClick={openEdit}
+                  onClick={() => openEdit(projectMenuTarget)}
                 >
                   编辑
                 </button>
                 <button
                   type="button"
                   className="flex w-full items-center px-3 py-2 text-sm hover:bg-accent"
-                  onClick={openRename}
+                  onClick={() => openRename(projectMenuTarget)}
                 >
                   重命名
                 </button>
                 <button
                   type="button"
-                  className="flex w-full items-center px-3 py-2 text-sm hover:bg-accent"
-                  onClick={openWorkspaceTerminal}
+                  className="flex w-full items-center px-3 py-2 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                  disabled={!canOpenMenuTerminal}
+                  title={!canOpenMenuTerminal ? '先选择该项目再打开终端' : undefined}
+                  onClick={() => {
+                    if (!canOpenMenuTerminal) return
+                    openWorkspaceTerminal()
+                  }}
                 >
                   打开终端
                 </button>
@@ -1351,7 +1650,7 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
                 <button
                   type="button"
                   className="flex w-full items-center px-3 py-2 text-sm text-destructive hover:bg-destructive/10"
-                  onClick={openDelete}
+                  onClick={() => openDelete(projectMenuTarget)}
                 >
                   删除
                 </button>
@@ -1360,6 +1659,183 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
             document.body,
           )
         : null}
+
+      <Modal
+        open={environmentOpen}
+        title="启动环境变量"
+        onClose={closeEnvironmentEditor}
+        className="max-w-4xl"
+      >
+        <div className="space-y-4">
+          <div className="text-xs text-destructive">
+            注意：保存后会在启动 Codex 或 Claude Code 时注入环境变量，请谨慎填写。
+          </div>
+          <div className="rounded-md border bg-background/40 p-3 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm font-medium">
+                全局配置
+                {!canSelectToolEnvironment(config)
+                  ? `（${toolLabelByType[environmentToolType]}）`
+                  : ''}
+              </div>
+              <div className="flex items-center gap-2">
+                {toolEnvironmentHint ? (
+                  <div className="text-xs text-muted-foreground">
+                    {toolEnvironmentHint}
+                  </div>
+                ) : null}
+                {toolEnvironmentLoading ? <Spinner /> : null}
+              </div>
+            </div>
+
+            {canSelectToolEnvironment(config) ? (
+              <div className="flex items-center gap-3">
+                <div className="text-xs text-muted-foreground">工具类型</div>
+                <Select
+                  value={environmentToolType}
+                  onValueChange={(value) =>
+                    setEnvironmentToolType(value as ToolType)
+                  }
+                  disabled={toolEnvironmentLoading || toolEnvironmentSaving}
+                >
+                  <SelectTrigger className="h-8 w-[180px] bg-background px-2 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {config.toolTypes.map((toolType) => (
+                      <SelectItem key={toolType} value={toolType}>
+                        {toolLabelByType[toolType]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
+
+            <div className="text-xs text-muted-foreground">
+              适用于所有 {toolLabelByType[environmentToolType]} 项目。
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {environmentKeysByTool[environmentToolType].map((key) => {
+                const description = getEnvironmentDescription(
+                  environmentToolType,
+                  key,
+                )
+                return (
+                  <div key={key} className="space-y-1">
+                    <div className="text-xs text-muted-foreground">{key}</div>
+                    <Input
+                      value={toolEnvironmentDraft[key] ?? ''}
+                      onChange={(e) =>
+                        updateToolEnvironmentValue(key, e.target.value)
+                      }
+                      disabled={toolEnvironmentLoading || toolEnvironmentSaving}
+                    />
+                    {description ? (
+                      <div className="text-[11px] text-muted-foreground">
+                        {description}
+                      </div>
+                    ) : null}
+                  </div>
+                )
+              })}
+            </div>
+
+            {toolEnvironmentError ? (
+              <div className="text-xs text-destructive">{toolEnvironmentError}</div>
+            ) : null}
+
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                onClick={() => void saveToolEnvironment()}
+                disabled={toolEnvironmentLoading || toolEnvironmentSaving}
+              >
+                {toolEnvironmentSaving ? '保存中…' : '保存全局'}
+              </Button>
+            </div>
+          </div>
+
+          <div className="rounded-md border bg-background/40 p-3 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm font-medium">当前项目</div>
+              <div className="flex items-center gap-2">
+                {projectEnvironmentHint ? (
+                  <div className="text-xs text-muted-foreground">
+                    {projectEnvironmentHint}
+                  </div>
+                ) : null}
+                {projectEnvironmentLoading ? <Spinner /> : null}
+              </div>
+            </div>
+
+            {selectedProject ? (
+              <>
+                <div className="text-xs text-muted-foreground">
+                  {selectedProject.name} ·
+                  {toolLabelByType[selectedProject.toolType]}（同名变量将覆盖全局）
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {environmentKeysByTool[selectedProject.toolType].map((key) => {
+                    const description = getEnvironmentDescription(
+                      selectedProject.toolType,
+                      key,
+                    )
+                    return (
+                      <div key={key} className="space-y-1">
+                        <div className="text-xs text-muted-foreground">
+                          {key}
+                        </div>
+                        <Input
+                          value={projectEnvironmentDraft[key] ?? ''}
+                          onChange={(e) =>
+                            updateProjectEnvironmentValue(key, e.target.value)
+                          }
+                          disabled={
+                            projectEnvironmentLoading || projectEnvironmentSaving
+                          }
+                        />
+                        {description ? (
+                          <div className="text-[11px] text-muted-foreground">
+                            {description}
+                          </div>
+                        ) : null}
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {projectEnvironmentError ? (
+                  <div className="text-xs text-destructive">
+                    {projectEnvironmentError}
+                  </div>
+                ) : null}
+
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    onClick={() => void saveProjectEnvironment()}
+                    disabled={
+                      projectEnvironmentLoading || projectEnvironmentSaving
+                    }
+                  >
+                    {projectEnvironmentSaving ? '保存中…' : '保存项目'}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                请选择项目后再编辑项目环境变量。
+              </div>
+            )}
+          </div>
+
+          <div className="text-xs text-muted-foreground">
+            保存后会在启动 Codex 或 Claude Code 时注入环境变量。
+          </div>
+        </div>
+      </Modal>
 
       <ProjectUpsertModal
         open={upsertOpen}
@@ -1383,6 +1859,8 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
         onClose={() => {
           if (renameBusy) return
           setRenameOpen(false)
+          setRenameTarget(null)
+          setRenameDraft('')
           setRenameError(null)
         }}
       >
@@ -1408,6 +1886,8 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
               onClick={() => {
                 if (renameBusy) return
                 setRenameOpen(false)
+                setRenameTarget(null)
+                setRenameDraft('')
                 setRenameError(null)
               }}
             >
@@ -1433,6 +1913,7 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
           }
           if (deleteBusy) return
           setDeleteDialogOpen(false)
+          setDeleteTarget(null)
           setDeleteError(null)
         }}
       >
@@ -1440,7 +1921,7 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
           <AlertDialogHeader>
             <AlertDialogTitle>删除项目</AlertDialogTitle>
             <AlertDialogDescription>
-              确定删除“{selectedProject?.name ?? ''}”吗？此操作不可恢复。
+              确定删除“{deleteTarget?.name ?? ''}”吗？此操作不可恢复。
             </AlertDialogDescription>
           </AlertDialogHeader>
           {deleteError ? <div className="text-sm text-destructive">{deleteError}</div> : null}
