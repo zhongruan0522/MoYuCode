@@ -1,15 +1,15 @@
 using System.Diagnostics;
-using System.Drawing.Drawing2D;
+using System.Drawing;
 using Microsoft.AspNetCore.Builder;
 using OneCode;
 
 namespace OneCode.Win;
 
-internal sealed class FloatingBallForm : Form
+internal sealed class TrayAppContext : ApplicationContext
 {
     private const string LocalUrl = "http://localhost:9110";
 
-    private readonly ContextMenuStrip menu;
+    private readonly NotifyIcon trayIcon;
     private readonly ToolStripMenuItem statusItem;
     private readonly ToolStripMenuItem startItem;
     private readonly ToolStripMenuItem stopItem;
@@ -20,25 +20,15 @@ internal sealed class FloatingBallForm : Form
     private bool isRunning;
     private bool isStarting;
     private bool isStopping;
-    private bool dragging;
-    private Point dragOffset;
 
-    public FloatingBallForm()
+    public TrayAppContext()
     {
-        FormBorderStyle = FormBorderStyle.None;
-        StartPosition = FormStartPosition.Manual;
-        ShowInTaskbar = false;
-        TopMost = true;
-        Size = new Size(56, 56);
-        BackColor = Color.FromArgb(0, 122, 204);
-        DoubleBuffered = true;
-
-        menu = new ContextMenuStrip();
+        var menu = new ContextMenuStrip();
         statusItem = new ToolStripMenuItem("Status: Stopped") { Enabled = false };
         startItem = new ToolStripMenuItem("Start OneCode", null, async (_, __) => await StartAppAsync());
         stopItem = new ToolStripMenuItem("Stop OneCode", null, async (_, __) => await StopAppAsync());
         openItem = new ToolStripMenuItem("Open OneCode", null, (_, __) => OpenUrl());
-        exitItem = new ToolStripMenuItem("Exit", null, (_, __) => Close());
+        exitItem = new ToolStripMenuItem("Exit", null, (_, __) => _ = ShutdownAsync());
 
         menu.Items.Add(statusItem);
         menu.Items.Add(new ToolStripSeparator());
@@ -48,106 +38,18 @@ internal sealed class FloatingBallForm : Form
         menu.Items.Add(openItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(exitItem);
-
         menu.Opening += (_, __) => RefreshMenu();
 
-        ContextMenuStrip = menu;
+        trayIcon = new NotifyIcon
+        {
+            Text = "OneCode",
+            Icon = SystemIcons.Application,
+            ContextMenuStrip = menu,
+            Visible = true
+        };
+        trayIcon.DoubleClick += (_, __) => OpenUrl();
 
-        MouseDown += OnMouseDown;
-        MouseMove += OnMouseMove;
-        MouseUp += OnMouseUp;
-    }
-
-    protected override void OnLoad(EventArgs e)
-    {
-        base.OnLoad(e);
-        PositionBottomRight();
-        UpdateRegion();
         _ = StartAppAsync();
-    }
-
-    protected override void OnResize(EventArgs e)
-    {
-        base.OnResize(e);
-        UpdateRegion();
-        Invalidate();
-    }
-
-    protected override void OnFormClosing(FormClosingEventArgs e)
-    {
-        if (isRunning)
-        {
-            try
-            {
-                StopAppAsync().GetAwaiter().GetResult();
-            }
-            catch
-            {
-            }
-        }
-
-        base.OnFormClosing(e);
-    }
-
-    protected override void OnPaint(PaintEventArgs e)
-    {
-        base.OnPaint(e);
-        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        using var fillBrush = new SolidBrush(Color.FromArgb(0, 122, 204));
-        e.Graphics.FillEllipse(fillBrush, 0, 0, Width - 1, Height - 1);
-
-        using var borderPen = new Pen(Color.White, 2);
-        e.Graphics.DrawEllipse(borderPen, 1, 1, Width - 3, Height - 3);
-
-        using var font = new Font("Segoe UI", 12, FontStyle.Bold, GraphicsUnit.Point);
-        var text = "OC";
-        var textSize = e.Graphics.MeasureString(text, font);
-        var textPoint = new PointF((Width - textSize.Width) / 2f, (Height - textSize.Height) / 2f);
-        using var textBrush = new SolidBrush(Color.White);
-        e.Graphics.DrawString(text, font, textBrush, textPoint);
-    }
-
-    private void OnMouseDown(object? sender, MouseEventArgs e)
-    {
-        if (e.Button != MouseButtons.Left)
-        {
-            return;
-        }
-
-        dragging = true;
-        dragOffset = new Point(e.X, e.Y);
-    }
-
-    private void OnMouseMove(object? sender, MouseEventArgs e)
-    {
-        if (!dragging)
-        {
-            return;
-        }
-
-        var screenPos = PointToScreen(e.Location);
-        Location = new Point(screenPos.X - dragOffset.X, screenPos.Y - dragOffset.Y);
-    }
-
-    private void OnMouseUp(object? sender, MouseEventArgs e)
-    {
-        if (e.Button == MouseButtons.Left)
-        {
-            dragging = false;
-        }
-    }
-
-    private void PositionBottomRight()
-    {
-        var workArea = Screen.FromPoint(Cursor.Position).WorkingArea;
-        Location = new Point(workArea.Right - Width - 12, workArea.Bottom - Height - 12);
-    }
-
-    private void UpdateRegion()
-    {
-        using var path = new GraphicsPath();
-        path.AddEllipse(0, 0, Width, Height);
-        Region = new Region(path);
     }
 
     private void RefreshMenu()
@@ -167,6 +69,7 @@ internal sealed class FloatingBallForm : Form
 
         startItem.Enabled = !isRunning && !isStarting;
         stopItem.Enabled = isRunning && !isStopping;
+        trayIcon.Text = isRunning ? "OneCode (Running)" : "OneCode (Stopped)";
     }
 
     private async Task StartAppAsync()
@@ -237,6 +140,24 @@ internal sealed class FloatingBallForm : Form
         }
     }
 
+    private async Task ShutdownAsync()
+    {
+        if (isRunning)
+        {
+            try
+            {
+                await StopAppAsync();
+            }
+            catch
+            {
+            }
+        }
+
+        trayIcon.Visible = false;
+        trayIcon.Dispose();
+        ExitThread();
+    }
+
     private static void OpenUrl()
     {
         try
@@ -244,12 +165,21 @@ internal sealed class FloatingBallForm : Form
             Process.Start(new ProcessStartInfo
             {
                 FileName = LocalUrl,
-                UseShellExecute = true,
+                UseShellExecute = true
             });
         }
         catch (Exception ex)
         {
             MessageBox.Show(ex.Message, "Open URL failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            trayIcon.Dispose();
+        }
+        base.Dispose(disposing);
     }
 }
