@@ -89,10 +89,10 @@ jobs:
             dotnet publish src/OneCode/OneCode.csproj -c Release -r "${RID}" --self-contained false -o "artifacts/publish/${RID}" -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }}
           done
           WIN_PUBLISH_ROOT="artifacts/publish/win-x64"
-          WIN_TMP_DIR="${WIN_PUBLISH_ROOT}/win-ball"
+          WIN_TMP_DIR="${WIN_PUBLISH_ROOT}/win-tray"
           rm -rf "${WIN_PUBLISH_ROOT}"
           mkdir -p "${WIN_TMP_DIR}"
-          dotnet publish src/OneCode.Win/OneCode.Win.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false -o "${WIN_TMP_DIR}"
+          dotnet publish src/OneCode.Win/OneCode.Win.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }} -p:DebugType=None -p:DebugSymbols=false -o "${WIN_TMP_DIR}"
           if [[ ! -f "${WIN_TMP_DIR}/OneCode.Win.exe" ]]; then
             echo "OneCode.Win.exe not found in win-x64 publish output."
             exit 1
@@ -310,4 +310,3 @@ jobs:
             "artifacts/OneCode-${{ steps.version.outputs.version }}-win-x64.zip"
           )
           gh release create "${TAG}" "${ASSETS[@]}" --title "${TAG}" --notes "${RELEASE_NOTES}" --target "${GITHUB_SHA}"
-
