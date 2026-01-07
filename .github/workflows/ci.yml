@@ -116,6 +116,60 @@ jobs:
           EOF
           chmod +x "artifacts/publish/linux-x64/run.sh"
 
+          cat > "artifacts/publish/linux-x64/install-service.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          SERVICE_NAME="${SERVICE_NAME:-onecode}"
+          URLS="${URLS:-http://0.0.0.0:9110}"
+          INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+          if [[ $EUID -ne 0 ]]; then
+            echo "Run this script with sudo." >&2
+            exit 1
+          fi
+
+          if [[ -x "$INSTALL_DIR/OneCode" ]]; then
+            EXECUTABLE="$INSTALL_DIR/OneCode"
+          elif [[ -f "$INSTALL_DIR/OneCode.dll" ]]; then
+            DOTNET_PATH="$(command -v dotnet || true)"
+            if [[ -z "$DOTNET_PATH" ]]; then
+              echo "dotnet not found in PATH." >&2
+              exit 1
+            fi
+            EXECUTABLE="$DOTNET_PATH $INSTALL_DIR/OneCode.dll"
+          else
+            echo "OneCode executable not found in $INSTALL_DIR" >&2
+            exit 1
+          fi
+
+          SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
+
+          cat > "$SERVICE_PATH" <<SERVICE_EOF
+          [Unit]
+          Description=OneCode service
+          After=network.target
+
+          [Service]
+          WorkingDirectory=$INSTALL_DIR
+          ExecStart=$EXECUTABLE --urls $URLS
+          Restart=always
+          RestartSec=5
+          Environment=DOTNET_ENVIRONMENT=Production
+          Environment=ASPNETCORE_URLS=$URLS
+
+          [Install]
+          WantedBy=multi-user.target
+          SERVICE_EOF
+
+          systemctl daemon-reload
+          systemctl enable --now "$SERVICE_NAME"
+          systemctl status "$SERVICE_NAME" --no-pager
+          echo "URL: $URLS"
+          echo "Open: http://localhost:9110"
+          EOF
+          chmod +x "artifacts/publish/linux-x64/install-service.sh"
+
           cat > "artifacts/publish/osx-x64/run.sh" <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
@@ -136,6 +190,89 @@ jobs:
           fi
           EOF
           chmod +x "artifacts/publish/osx-x64/run.sh"
+
+          cat > "artifacts/publish/osx-x64/install-service.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          SERVICE_NAME="${SERVICE_NAME:-com.onecode.service}"
+          URLS="${URLS:-http://0.0.0.0:9110}"
+          INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+          if [[ $EUID -ne 0 ]]; then
+            echo "Run this script with sudo." >&2
+            exit 1
+          fi
+
+          if [[ -x "$INSTALL_DIR/OneCode" ]]; then
+            program_args=("$INSTALL_DIR/OneCode" "--urls" "$URLS")
+          else
+            dll="$INSTALL_DIR/OneCode.dll"
+            if [[ ! -f "$dll" ]]; then
+              echo "OneCode executable not found in $INSTALL_DIR" >&2
+              exit 1
+            fi
+            dotnet_path="$(command -v dotnet || true)"
+            if [[ -z "$dotnet_path" ]]; then
+              for candidate in /usr/local/share/dotnet/dotnet /opt/homebrew/bin/dotnet; do
+                if [[ -x "$candidate" ]]; then
+                  dotnet_path="$candidate"
+                  break
+                fi
+              done
+            fi
+            if [[ -z "$dotnet_path" ]]; then
+              echo "dotnet not found in PATH." >&2
+              exit 1
+            fi
+            program_args=("$dotnet_path" "$dll" "--urls" "$URLS")
+          fi
+
+          plist_path="/Library/LaunchDaemons/${SERVICE_NAME}.plist"
+
+          {
+            echo '<?xml version="1.0" encoding="UTF-8"?>'
+            echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+            echo '<plist version="1.0">'
+            echo '<dict>'
+            echo '  <key>Label</key>'
+            echo "  <string>${SERVICE_NAME}</string>"
+            echo '  <key>ProgramArguments</key>'
+            echo '  <array>'
+            for arg in "${program_args[@]}"; do
+              printf '    <string>%s</string>\n' "$arg"
+            done
+            echo '  </array>'
+            echo '  <key>WorkingDirectory</key>'
+            echo "  <string>${INSTALL_DIR}</string>"
+            echo '  <key>EnvironmentVariables</key>'
+            echo '  <dict>'
+            echo '    <key>DOTNET_ENVIRONMENT</key>'
+            echo '    <string>Production</string>'
+            echo '    <key>ASPNETCORE_URLS</key>'
+            echo "    <string>${URLS}</string>"
+            echo '  </dict>'
+            echo '  <key>RunAtLoad</key>'
+            echo '  <true/>'
+            echo '  <key>KeepAlive</key>'
+            echo '  <true/>'
+            echo '  <key>StandardOutPath</key>'
+            echo "  <string>${INSTALL_DIR}/onecode.out.log</string>"
+            echo '  <key>StandardErrorPath</key>'
+            echo "  <string>${INSTALL_DIR}/onecode.err.log</string>"
+            echo '</dict>'
+            echo '</plist>'
+          } > "$plist_path"
+
+          launchctl bootout system "$plist_path" >/dev/null 2>&1 || true
+          launchctl bootstrap system "$plist_path"
+          launchctl enable system/"${SERVICE_NAME}"
+          launchctl kickstart -k system/"${SERVICE_NAME}"
+
+          echo "URL: $URLS"
+          echo "Open: http://localhost:9110"
+          EOF
+          chmod +x "artifacts/publish/osx-x64/install-service.sh"
 
           cat > "artifacts/publish/win-x64/OneCode.bat" <<'EOF'
           @echo off
