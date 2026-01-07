@@ -77,13 +77,13 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:5210',
+        target: 'http://localhost:9110',
         changeOrigin: true,
         ws: true, // 启用 WebSocket 代理
         // 不重写路径，保持 /api 前缀
       },
       '/.well-known': {
-        target: 'http://localhost:5210',
+        target: 'http://localhost:9110',
         changeOrigin: true,
       },
     }

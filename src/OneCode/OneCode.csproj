@@ -11,6 +11,7 @@
     <ItemGroup>
         <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.1" />
         <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="10.0.1" />
+        <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.1" />
         <PackageReference Include="Quick.PtyNet" Version="1.0.3" />
         <PackageReference Include="Quick.PtyNet.WinPty" Version="1.0.1" />
     </ItemGroup>
@@ -25,5 +26,13 @@
         <EmbeddedResource Include="wwwroot\**\*" />
         <Content Update="wwwroot\**\*" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
     </ItemGroup>
+
+    <Target Name="EnsureFavicon" BeforeTargets="GenerateEmbeddedFilesManifest">
+        <MakeDir Directories="wwwroot" Condition="!Exists('wwwroot')" />
+        <Copy SourceFiles="favicon.png"
+              DestinationFiles="wwwroot\favicon.png"
+              SkipUnchangedFiles="true"
+              Condition="Exists('favicon.png') and !Exists('wwwroot\favicon.png')" />
+    </Target>
 
 </Project>

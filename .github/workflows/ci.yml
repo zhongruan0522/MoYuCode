@@ -89,6 +89,107 @@ jobs:
             dotnet publish src/OneCode/OneCode.csproj -c Release -r "${RID}" --self-contained false -o "artifacts/publish/${RID}" -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }}
           done
 
+      - name: Add platform scripts
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > "artifacts/publish/linux-x64/run.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          cd "$(dirname "$0")"
+
+          export DOTNET_ENVIRONMENT=Production
+          export ASPNETCORE_URLS="http://0.0.0.0:9110"
+
+          echo "OneCode is running at $ASPNETCORE_URLS"
+          echo "Open: http://localhost:9110"
+
+          if [[ -f "./OneCode" ]]; then
+            chmod +x "./OneCode"
+            ./OneCode
+          else
+            dotnet "./OneCode.dll"
+          fi
+          EOF
+          chmod +x "artifacts/publish/linux-x64/run.sh"
+
+          cat > "artifacts/publish/osx-x64/run.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          cd "$(dirname "$0")"
+
+          export DOTNET_ENVIRONMENT=Production
+          export ASPNETCORE_URLS="http://0.0.0.0:9110"
+
+          echo "OneCode is running at $ASPNETCORE_URLS"
+          echo "Open: http://localhost:9110"
+
+          if [[ -f "./OneCode" ]]; then
+            chmod +x "./OneCode"
+            ./OneCode
+          else
+            dotnet "./OneCode.dll"
+          fi
+          EOF
+          chmod +x "artifacts/publish/osx-x64/run.sh"
+
+          cat > "artifacts/publish/win-x64/OneCode.bat" <<'EOF'
+          @echo off
+          setlocal
+          cd /d "%~dp0"
+          set "DOTNET_ENVIRONMENT=Production"
+          set "ASPNETCORE_URLS=http://0.0.0.0:9110"
+          echo OneCode is running at %ASPNETCORE_URLS%
+          echo Open: http://localhost:9110
+          if exist "OneCode.exe" (
+            "OneCode.exe"
+          ) else (
+            dotnet "OneCode.dll"
+          )
+          endlocal
+          EOF
+
+          cat > "artifacts/publish/win-x64/install-service.ps1" <<'EOF'
+          param(
+            [string]$ServiceName = "OneCode",
+            [string]$DisplayName = "OneCode",
+            [string]$Description = "OneCode service",
+            [string]$Urls = "http://0.0.0.0:9110"
+          )
+          $installDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+          $exePath = Join-Path $installDir "OneCode.exe"
+          if (-not (Test-Path $exePath)) {
+            $exePath = Join-Path $installDir "OneCode.dll"
+            if (-not (Test-Path $exePath)) {
+              Write-Error "OneCode executable not found in $installDir"
+              exit 1
+            }
+            $binaryPath = "dotnet `"$exePath`" --urls `"$Urls`""
+          } else {
+            $binaryPath = "`"$exePath`" --urls `"$Urls`""
+          }
+          $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            Write-Error "Run this script as Administrator."
+            exit 1
+          }
+          $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+          if ($null -eq $service) {
+            New-Service -Name $ServiceName -DisplayName $DisplayName -BinaryPathName $binaryPath -Description $Description -StartupType Automatic | Out-Null
+          } else {
+            sc.exe config $ServiceName binPath= "$binaryPath" start= auto | Out-Null
+          }
+          Start-Service -Name $ServiceName
+          $service = Get-Service -Name $ServiceName
+          Write-Host "Service status: $service.Status"
+          Write-Host "URL: $Urls"
+          Write-Host "Open: http://localhost:9110"
+          EOF
+
       - name: Package release assets
         if: github.event_name == 'workflow_dispatch'
         shell: bash

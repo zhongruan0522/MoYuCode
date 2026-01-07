@@ -14,7 +14,7 @@
 ## Build, Test, and Development Commands
 Backend:
 - `dotnet build src/OneCode/OneCode.csproj` — compile the API.
-- `dotnet run --project src/OneCode/OneCode.csproj --launch-profile http` — run on `http://localhost:5210` (use `--launch-profile https` for `https://localhost:7004`).
+- `dotnet run --project src/OneCode/OneCode.csproj --launch-profile http` — run on `http://localhost:9110` (use `--launch-profile https` for `https://localhost:9111`).
 
 Frontend (from `web/`):
 - `npm ci` — install dependencies (uses `package-lock.json`).

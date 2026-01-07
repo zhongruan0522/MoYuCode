@@ -1878,12 +1878,9 @@ const ChatToolCallItem = memo(function ChatToolCallItem({
   const input = message.toolInput ?? message.text ?? ''
   const output = message.toolOutput ?? ''
   const isError = Boolean(message.toolIsError)
-  const isClaude = toolType === 'ClaudeCode'
-
   const askInput = useMemo(
-    () =>
-      isClaude && isAskUserQuestionToolName(toolName) ? tryParseAskUserQuestionToolInput(input) : null,
-    [input, isClaude, toolName],
+    () => (isAskUserQuestionToolName(toolName) ? tryParseAskUserQuestionToolInput(input) : null),
+    [input, toolName, toolType],
   )
   const writeInput = useMemo(
     () => (isWriteToolName(toolName) ? tryParseWriteToolInput(input) : null),
@@ -3869,11 +3866,16 @@ export function ProjectChat({
               role: 'agent',
               kind: 'tool',
               toolName: toolCall.toolName,
+              toolUseId: toolCall.callId,
+              toolInput: toolCall.toolArgs,
               text: toolCall.toolArgs,
             }
 
+            const shouldOpenTool = isAskUserQuestionToolName(toolCall.toolName)
             setToolOpenById((prev) =>
-              prev[toolMessageId] !== undefined ? prev : { ...prev, [toolMessageId]: false },
+              prev[toolMessageId] !== undefined
+                ? prev
+                : { ...prev, [toolMessageId]: shouldOpenTool },
             )
 
             setMessages((prev) => insertBeforeMessage(prev, agentMessageId, toolMessage))

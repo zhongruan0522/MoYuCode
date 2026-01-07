@@ -11,6 +11,21 @@ try
 {
     var builder = WebApplication.CreateBuilder(args);
 
+    const string defaultUrl = "http://0.0.0.0:9110";
+    var hasUrls = !string.IsNullOrWhiteSpace(builder.Configuration["urls"])
+        || !string.IsNullOrWhiteSpace(builder.Configuration["ASPNETCORE_URLS"]);
+    var hasKestrelEndpoints = builder.Configuration.GetSection("Kestrel:Endpoints").GetChildren().Any();
+    var usingDefaultUrl = !hasUrls && !hasKestrelEndpoints;
+    if (usingDefaultUrl)
+    {
+        builder.WebHost.UseUrls(defaultUrl);
+    }
+
+    builder.Host.UseWindowsService(options =>
+    {
+        options.ServiceName = "OneCode";
+    });
+
     builder.Services.AddOpenApi();
     builder.Services.ConfigureHttpJsonOptions(options =>
     {
@@ -107,6 +122,11 @@ try
     app.MapMedia();
     app.MapTerminal();
     app.MapInfo();
+
+    if (usingDefaultUrl)
+    {
+        app.Logger.LogInformation("Default URL binding active: {Url}", defaultUrl);
+    }
 
 // Configure the HTTP request pipeline.
     if (app.Environment.IsDevelopment())

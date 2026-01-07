@@ -11,9 +11,9 @@ OneCode is a dual-stack application providing a web UI for AI coding assistants 
 ### Backend (C# API)
 - Build: `dotnet build src/OneCode/OneCode.csproj`
 - Run (HTTP): `dotnet run --project src/OneCode/OneCode.csproj --launch-profile http`
-  - Runs on `http://localhost:5210`
+  - Runs on `http://localhost:9110`
 - Run (HTTPS): `dotnet run --project src/OneCode/OneCode.csproj --launch-profile https`
-  - Runs on `https://localhost:7004`
+  - Runs on `https://localhost:9111`
 
 ### Frontend (React)
 All commands should be run from the `web/` directory:
