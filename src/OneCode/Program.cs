@@ -43,18 +43,60 @@ try
     builder.Services.AddSingleton<CodexSessionManager>();
 
     var app = builder.Build();
-
-    var embeddedWebRoot = new ManifestEmbeddedFileProvider(typeof(Program).Assembly, "wwwroot");
-
-    app.UseDefaultFiles(new DefaultFilesOptions
+    try
     {
-        FileProvider = embeddedWebRoot,
-    });
 
-    app.UseStaticFiles(new StaticFileOptions
+        var embeddedWebRoot = new ManifestEmbeddedFileProvider(typeof(Program).Assembly, "wwwroot");
+
+        app.UseDefaultFiles(new DefaultFilesOptions
+        {
+            FileProvider = embeddedWebRoot,
+        });
+
+        app.UseStaticFiles(new StaticFileOptions
+        {
+            FileProvider = embeddedWebRoot,
+        });
+
+        app.MapFallback(async context =>
+        {
+            if (context.Request.Path.StartsWithSegments("/api")
+                || context.Request.Path.StartsWithSegments("/media")
+                || context.Request.Path.StartsWithSegments("/terminal")
+                || context.Request.Path.StartsWithSegments("/a2a")
+                || context.Request.Path.StartsWithSegments("/.well-known"))
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+
+            var requestPath = context.Request.Path.Value ?? string.Empty;
+            if (Path.HasExtension(requestPath))
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+
+            var indexFile = embeddedWebRoot.GetFileInfo("index.html");
+            if (!indexFile.Exists)
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+
+            context.Response.ContentType = "text/html; charset=utf-8";
+            await using var stream = indexFile.CreateReadStream();
+            await stream.CopyToAsync(context.Response.Body);
+        });
+
+    }
+    catch (Exception ex)
     {
-        FileProvider = embeddedWebRoot,
-    });
+    }
+    finally
+    {
+
+    }
 
     app.UseCors();
     app.UseWebSockets();
@@ -64,37 +106,7 @@ try
     app.MapA2a();
     app.MapMedia();
     app.MapTerminal();
-
-    app.MapFallback(async context =>
-    {
-        if (context.Request.Path.StartsWithSegments("/api")
-            || context.Request.Path.StartsWithSegments("/media")
-            || context.Request.Path.StartsWithSegments("/terminal")
-            || context.Request.Path.StartsWithSegments("/a2a")
-            || context.Request.Path.StartsWithSegments("/.well-known"))
-        {
-            context.Response.StatusCode = StatusCodes.Status404NotFound;
-            return;
-        }
-
-        var requestPath = context.Request.Path.Value ?? string.Empty;
-        if (Path.HasExtension(requestPath))
-        {
-            context.Response.StatusCode = StatusCodes.Status404NotFound;
-            return;
-        }
-
-        var indexFile = embeddedWebRoot.GetFileInfo("index.html");
-        if (!indexFile.Exists)
-        {
-            context.Response.StatusCode = StatusCodes.Status404NotFound;
-            return;
-        }
-
-        context.Response.ContentType = "text/html; charset=utf-8";
-        await using var stream = indexFile.CreateReadStream();
-        await stream.CopyToAsync(context.Response.Body);
-    });
+    app.MapInfo();
 
 // Configure the HTTP request pipeline.
     if (app.Environment.IsDevelopment())

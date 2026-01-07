@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import {
   Link,
   Navigate,
@@ -12,6 +12,7 @@ import { CodePage } from '@/pages/CodePage'
 import { NodeInstallPage } from '@/pages/NodeInstallPage'
 import { ToolPage } from '@/pages/ToolPage'
 import Providers from '@/pages/Providers'
+import { api } from '@/api/client'
 import { ThemeTogglerButton } from '@animate-ui/components-buttons-theme-toggler'
 import { Settings } from 'lucide-react'
 
@@ -71,6 +72,21 @@ function LegacyProjectRouteRedirect() {
 }
 
 export default function App() {
+  const [appVersion, setAppVersion] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    api.app
+      .version()
+      .then((res) => {
+        if (!cancelled) setAppVersion(res.version)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   return (
     <div className="h-screen overflow-hidden bg-background text-foreground">
       <div className="flex h-full w-full">
@@ -93,13 +109,18 @@ export default function App() {
             />
           </nav>
 
-          <div className="mt-auto">
+          <div className="mt-auto flex flex-col items-center">
             <ThemeTogglerButton
               aria-label="切换主题"
               title="切换主题"
               variant="ghost"
               size="lg"
             />
+            {appVersion ? (
+              <div className="mt-1 w-full text-center text-[10px] leading-none text-muted-foreground">
+                v{appVersion}
+              </div>
+            ) : null}
           </div>
         </aside>
 

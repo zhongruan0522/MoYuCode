@@ -70,6 +70,85 @@ public sealed class A2aTaskManager
         return true;
     }
 
+    public bool TrySubmitAskUserQuestion(
+        string taskId,
+        string toolUseId,
+        IReadOnlyDictionary<string, string> answers,
+        [NotNullWhen(false)] out string? error)
+    {
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(taskId))
+        {
+            error = "Missing taskId.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(toolUseId))
+        {
+            error = "Missing toolUseId.";
+            return false;
+        }
+
+        if (!_tasks.TryGetValue(taskId, out var state))
+        {
+            error = "Task not found.";
+            return false;
+        }
+
+        StreamWriter? writer;
+        lock (state.Sync)
+        {
+            if (state.ToolType != ToolType.ClaudeCode)
+            {
+                error = "Task is not a Claude Code task.";
+                return false;
+            }
+
+            writer = state.ClaudeInput;
+        }
+
+        if (writer is null)
+        {
+            error = "Claude input stream is not available.";
+            return false;
+        }
+
+        var formatted = answers.Count == 0
+            ? "User has answered your questions. You can now continue with the user's answers in mind."
+            : $"User has answered your questions: {string.Join(", ", answers.Select(kvp => $"\"{kvp.Key}\"=\"{kvp.Value}\""))}. You can now continue with the user's answers in mind.";
+
+        var toolResult = new Dictionary<string, object?>
+        {
+            ["type"] = "tool_result",
+            ["tool_use_id"] = toolUseId,
+            ["content"] = formatted,
+            ["is_error"] = false,
+        };
+
+        var message = new Dictionary<string, object?>
+        {
+            ["type"] = "user",
+            ["message"] = new Dictionary<string, object?>
+            {
+                ["role"] = "user",
+                ["content"] = new object[] { toolResult },
+            },
+        };
+
+        try
+        {
+            writer.WriteLine(JsonSerializer.Serialize(message, _jsonOptions));
+            writer.Flush();
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
     public async IAsyncEnumerable<A2aStoredEvent> StreamEventsAsync(
         string taskId,
         long? afterEventId,
@@ -610,6 +689,32 @@ public sealed class A2aTaskManager
             state.ActiveProcess = process;
         }
 
+        process.StandardInput.AutoFlush = true;
+        lock (state.Sync)
+        {
+            state.ClaudeInput = process.StandardInput;
+        }
+
+        var userMessage = new Dictionary<string, object?>
+        {
+            ["type"] = "user",
+            ["message"] = new Dictionary<string, object?>
+            {
+                ["role"] = "user",
+                ["content"] = prompt,
+            },
+        };
+
+        try
+        {
+            await process.StandardInput.WriteLineAsync(JsonSerializer.Serialize(userMessage, _jsonOptions));
+            await process.StandardInput.FlushAsync();
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+        {
+            return new ClaudeRunResult(SessionNotFound: false, Cancelled: false, FailureMessage: ex.Message);
+        }
+
         string? lastStderrLine = null;
         string? sessionNotFoundLineFromStderr = null;
 
@@ -635,6 +740,7 @@ public sealed class A2aTaskManager
             CancellationToken.None);
 
         var sawAnyTextDelta = false;
+        var toolStreamState = new ClaudeToolStreamState();
 
         try
         {
@@ -681,7 +787,7 @@ public sealed class A2aTaskManager
                 try
                 {
                     using var doc = JsonDocument.Parse(trimmed);
-                    HandleClaudeStreamLine(state, request, doc.RootElement, ref sawAnyTextDelta);
+                    HandleClaudeStreamLine(state, request, doc.RootElement, toolStreamState, ref sawAnyTextDelta);
                     if (IsFinal(state))
                     {
                         break;
@@ -690,8 +796,25 @@ public sealed class A2aTaskManager
                 catch (JsonException)
                 {
                     var preview = trimmed.Length > 4000 ? trimmed[..4000] + "…(truncated)…" : trimmed;
-                    AppendSystemLog(state, request, $"[claude] {preview}");
+                    AppendSystemLog(state, request, $"[claude] {preview}");     
                 }
+            }
+
+            lock (state.Sync)
+            {
+                if (ReferenceEquals(state.ClaudeInput, process.StandardInput))
+                {
+                    state.ClaudeInput = null;
+                }
+            }
+
+            try
+            {
+                process.StandardInput.Close();
+            }
+            catch
+            {
+                // ignore
             }
 
             try
@@ -757,14 +880,29 @@ public sealed class A2aTaskManager
                 {
                     state.ActiveProcess = null;
                 }
+
+                if (ReferenceEquals(state.ClaudeInput, process.StandardInput))
+                {
+                    state.ClaudeInput = null;
+                }
             }
         }
+    }
+
+    private sealed record ClaudeToolUseBlock(string ToolUseId, string? ToolName);
+
+    private sealed class ClaudeToolStreamState
+    {
+        public Dictionary<int, ClaudeToolUseBlock> ToolUseByIndex { get; } = new();
+        public Dictionary<string, StringBuilder> ToolInputByToolUseId { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, int> ToolInputSentLengthByToolUseId { get; } = new(StringComparer.Ordinal);
     }
 
     private void HandleClaudeStreamLine(
         A2aTaskState state,
         A2aTaskStartRequest request,
         JsonElement root,
+        ClaudeToolStreamState toolStreamState,
         ref bool sawAnyTextDelta)
     {
         void AppendClaudeToolEvent(
@@ -848,6 +986,8 @@ public sealed class A2aTaskManager
         {
             var ev = TryGetObject(root, "event");
             var evType = TryReadString(ev, "type") ?? string.Empty;
+            var contentBlockIndex = TryReadInt(ev, "index") ?? TryReadInt(ev, "content_block_index");
+
             if (string.Equals(evType, "content_block_start", StringComparison.OrdinalIgnoreCase))
             {
                 var block = TryGetObject(ev, "content_block");
@@ -857,7 +997,28 @@ public sealed class A2aTaskManager
                 {
                     var toolUseId = TryReadString(block, "id") ?? string.Empty;
                     var toolName = TryReadString(block, "name");
-                    var input = block.TryGetProperty("input", out var inputProp) ? ReadToolContentAsText(inputProp) : null;
+
+                    if (contentBlockIndex is not null && !string.IsNullOrWhiteSpace(toolUseId))
+                    {
+                        toolStreamState.ToolUseByIndex[contentBlockIndex.Value] = new ClaudeToolUseBlock(toolUseId, toolName);
+                    }
+
+                    string? input = null;
+                    if (block.TryGetProperty("input", out var inputProp))
+                    {
+                        var isEmptyObject = inputProp.ValueKind == JsonValueKind.Object
+                            && !inputProp.EnumerateObject().MoveNext();
+                        if (!isEmptyObject)
+                        {
+                            input = ReadToolContentAsText(inputProp);
+                        }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(input) && !string.IsNullOrWhiteSpace(toolUseId))
+                    {
+                        toolStreamState.ToolInputByToolUseId[toolUseId] = new StringBuilder(input);
+                    }
+
                     AppendClaudeToolEvent(kind: "tool_use", toolUseId, toolName, input, output: null);
                 }
                 else if (string.Equals(blockType, "tool_result", StringComparison.OrdinalIgnoreCase))
@@ -866,76 +1027,165 @@ public sealed class A2aTaskManager
                     var output = block.TryGetProperty("content", out var outputProp) ? ReadToolContentAsText(outputProp) : null;
                     var isError = block.TryGetProperty("is_error", out var isErrorProp)
                                   && isErrorProp.ValueKind == JsonValueKind.True;
+
                     AppendClaudeToolEvent(kind: "tool_result", toolUseId, toolName: null, input: null, output, isError);
                 }
 
                 return;
             }
 
-            if (!string.Equals(evType, "content_block_delta", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(evType, "content_block_delta", StringComparison.OrdinalIgnoreCase))
             {
+                var delta = TryGetObject(ev, "delta");
+                var deltaType = TryReadString(delta, "type") ?? string.Empty;
+
+                if (string.Equals(deltaType, "input_json_delta", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (contentBlockIndex is null)
+                    {
+                        return;
+                    }
+
+                    if (!toolStreamState.ToolUseByIndex.TryGetValue(contentBlockIndex.Value, out var toolBlock))
+                    {
+                        return;
+                    }
+
+                    var partialJson = TryReadString(delta, "partial_json")
+                        ?? TryReadString(delta, "partialJson")
+                        ?? TryReadString(delta, "json")
+                        ?? TryReadString(delta, "delta");
+
+                    if (string.IsNullOrWhiteSpace(partialJson))
+                    {
+                        return;
+                    }
+
+                    if (!toolStreamState.ToolInputByToolUseId.TryGetValue(toolBlock.ToolUseId, out var builder))
+                    {
+                        builder = new StringBuilder();
+                        toolStreamState.ToolInputByToolUseId[toolBlock.ToolUseId] = builder;
+                    }
+
+                    builder.Append(partialJson);
+
+                    // Stream partial tool args to the UI so it can parse incremental JSON (e.g. Edit old/new strings).
+                    var length = builder.Length;
+                    if (!toolStreamState.ToolInputSentLengthByToolUseId.TryGetValue(toolBlock.ToolUseId, out var lastSent))
+                    {
+                        lastSent = 0;
+                    }
+
+                    // Throttle to reduce UI churn: emit at most every 256 chars.
+                    if (length - lastSent >= 256)
+                    {
+                        toolStreamState.ToolInputSentLengthByToolUseId[toolBlock.ToolUseId] = length;
+                        AppendClaudeToolEvent(
+                            kind: "tool_use",
+                            toolUseId: toolBlock.ToolUseId,
+                            toolName: toolBlock.ToolName,
+                            input: builder.ToString(),
+                            output: null);
+                    }
+
+                    return;
+                }
+
+                var textDelta = string.Equals(deltaType, "text_delta", StringComparison.OrdinalIgnoreCase)
+                    ? TryReadString(delta, "text")
+                    : TryReadString(delta, "text");
+
+                if (!string.IsNullOrWhiteSpace(textDelta))
+                {
+                    lock (state.Sync)
+                    {
+                        state.AssistantText.Append(textDelta);
+                    }
+
+                    sawAnyTextDelta = true;
+                    AppendResult(
+                        state,
+                        new
+                        {
+                            statusUpdate = BuildStatusUpdate(
+                                taskId: request.TaskId,
+                                contextId: request.ContextId,
+                                state: "TASK_STATE_WORKING",
+                                message: new
+                                {
+                                    role = "agent",
+                                    messageId = request.AgentMessageId,
+                                    taskId = request.TaskId,
+                                    contextId = request.ContextId,
+                                    parts = new[] { new { text = textDelta } },
+                                },
+                                final: false),
+                        });
+                }
+
+                var thinkingDelta = string.Equals(deltaType, "thinking_delta", StringComparison.OrdinalIgnoreCase)
+                    ? TryReadString(delta, "thinking")
+                    : TryReadString(delta, "thinking");
+
+                if (!string.IsNullOrWhiteSpace(thinkingDelta))
+                {
+                    lock (state.Sync)
+                    {
+                        state.ReasoningText.Append(thinkingDelta);
+                    }
+
+                    AppendResult(
+                        state,
+                        new
+                        {
+                            artifactUpdate = BuildTextArtifactUpdate(
+                                taskId: request.TaskId,
+                                contextId: request.ContextId,
+                                artifactId: $"artifact-reasoning-{request.TaskId}",
+                                name: "reasoning",
+                                text: thinkingDelta,
+                                append: true,
+                                lastChunk: false),
+                        });
+                }
+
                 return;
             }
 
-            var delta = TryGetObject(ev, "delta");
-            var deltaType = TryReadString(delta, "type") ?? string.Empty;
-
-            var textDelta = string.Equals(deltaType, "text_delta", StringComparison.OrdinalIgnoreCase)
-                ? TryReadString(delta, "text")
-                : TryReadString(delta, "text");
-
-            if (!string.IsNullOrWhiteSpace(textDelta))
+            if (string.Equals(evType, "content_block_stop", StringComparison.OrdinalIgnoreCase))
             {
-                lock (state.Sync)
+                if (contentBlockIndex is null)
                 {
-                    state.AssistantText.Append(textDelta);
+                    return;
                 }
 
-                sawAnyTextDelta = true;
-                AppendResult(
-                    state,
-                    new
-                    {
-                        statusUpdate = BuildStatusUpdate(
-                            taskId: request.TaskId,
-                            contextId: request.ContextId,
-                            state: "TASK_STATE_WORKING",
-                            message: new
-                            {
-                                role = "agent",
-                                messageId = request.AgentMessageId,
-                                taskId = request.TaskId,
-                                contextId = request.ContextId,
-                                parts = new[] { new { text = textDelta } },
-                            },
-                            final: false),
-                    });
-            }
-
-            var thinkingDelta = string.Equals(deltaType, "thinking_delta", StringComparison.OrdinalIgnoreCase)
-                ? TryReadString(delta, "thinking")
-                : TryReadString(delta, "thinking");
-
-            if (!string.IsNullOrWhiteSpace(thinkingDelta))
-            {
-                lock (state.Sync)
+                if (!toolStreamState.ToolUseByIndex.TryGetValue(contentBlockIndex.Value, out var toolBlock))
                 {
-                    state.ReasoningText.Append(thinkingDelta);
+                    return;
                 }
 
-                AppendResult(
-                    state,
-                    new
-                    {
-                        artifactUpdate = BuildTextArtifactUpdate(
-                            taskId: request.TaskId,
-                            contextId: request.ContextId,
-                            artifactId: $"artifact-reasoning-{request.TaskId}",
-                            name: "reasoning",
-                            text: thinkingDelta,
-                            append: true,
-                            lastChunk: false),
-                    });
+                if (!toolStreamState.ToolInputByToolUseId.TryGetValue(toolBlock.ToolUseId, out var builder))
+                {
+                    toolStreamState.ToolUseByIndex.Remove(contentBlockIndex.Value);
+                    return;
+                }
+
+                var input = builder.ToString();
+                if (!string.IsNullOrWhiteSpace(input))
+                {
+                    // Always emit the final args at stop, even if throttled earlier.
+                    AppendClaudeToolEvent(
+                        kind: "tool_use",
+                        toolUseId: toolBlock.ToolUseId,
+                        toolName: toolBlock.ToolName,
+                        input: input,
+                        output: null);
+                }
+
+                toolStreamState.ToolUseByIndex.Remove(contentBlockIndex.Value);
+                toolStreamState.ToolInputByToolUseId.Remove(toolBlock.ToolUseId);
+                toolStreamState.ToolInputSentLengthByToolUseId.Remove(toolBlock.ToolUseId);
+                return;
             }
 
             return;
@@ -1052,6 +1302,59 @@ public sealed class A2aTaskManager
                             },
                             final: false),
                     });
+            }
+
+            return;
+        }
+
+        if (string.Equals(type, "user", StringComparison.OrdinalIgnoreCase))
+        {
+            var message = TryGetObject(root, "message");
+            if (message.ValueKind != JsonValueKind.Object
+                || !message.TryGetProperty("content", out var content)
+                || content.ValueKind != JsonValueKind.Array)
+            {
+                return;
+            }
+
+            string? toolUseResultJson = null;
+            if (root.TryGetProperty("tool_use_result", out var toolUseResultProp))
+            {
+                toolUseResultJson = ReadToolContentAsText(toolUseResultProp);
+            }
+
+            foreach (var part in content.EnumerateArray())
+            {
+                if (part.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var partType = TryReadString(part, "type") ?? string.Empty;
+                if (!string.Equals(partType, "tool_result", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var toolUseId = TryReadString(part, "tool_use_id") ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(toolUseId))
+                {
+                    continue;
+                }
+
+                var output = part.TryGetProperty("content", out var outputProp) ? ReadToolContentAsText(outputProp) : null;
+                var isError = part.TryGetProperty("is_error", out var isErrorProp)
+                              && isErrorProp.ValueKind == JsonValueKind.True;
+
+                string? mergedOutput = output;
+                if (!string.IsNullOrWhiteSpace(toolUseResultJson))
+                {
+                    mergedOutput = string.IsNullOrWhiteSpace(mergedOutput)
+                        ? toolUseResultJson
+                        : $"{mergedOutput}\n\n{toolUseResultJson}";
+                }
+
+                AppendClaudeToolEvent(kind: "tool_result", toolUseId, toolName: null, input: null, mergedOutput, isError);
             }
 
             return;
@@ -1277,10 +1580,12 @@ public sealed class A2aTaskManager
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = true,
             CreateNoWindow = true,
             WorkingDirectory = request.Cwd,
             StandardOutputEncoding = utf8,
             StandardErrorEncoding = utf8,
+            StandardInputEncoding = utf8,
         };
 
         var configuredExecutable = (_configuration["Claude:ExecutablePath"] ?? string.Empty).Trim();
@@ -1333,6 +1638,8 @@ public sealed class A2aTaskManager
         startInfo.ArgumentList.Add("--print");
         startInfo.ArgumentList.Add("--output-format");
         startInfo.ArgumentList.Add("stream-json");
+        startInfo.ArgumentList.Add("--input-format");
+        startInfo.ArgumentList.Add("stream-json");
         startInfo.ArgumentList.Add("--include-partial-messages");
         startInfo.ArgumentList.Add("--dangerously-skip-permissions");
         startInfo.ArgumentList.Add("--add-dir");
@@ -1354,8 +1661,6 @@ public sealed class A2aTaskManager
             startInfo.ArgumentList.Add("--session-id");
             startInfo.ArgumentList.Add(sessionId);
         }
-
-        startInfo.ArgumentList.Add(prompt);
 
         if (!string.IsNullOrWhiteSpace(request.ProviderApiKey))
         {
@@ -1627,6 +1932,19 @@ public sealed class A2aTaskManager
             catch
             {
                 // ignore
+            }
+
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0)
+            {
+                continue;
+            }
+
+            if (trimmed.StartsWith("@[", StringComparison.Ordinal)
+                && trimmed.EndsWith("]", StringComparison.Ordinal)
+                && trimmed.Contains("image", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
             }
 
             var text = $"{line}\n";
@@ -2337,6 +2655,7 @@ internal sealed class A2aTaskState
     public bool CancelRequested { get; set; }
     public Task? RunningTask { get; set; }
     public Process? ActiveProcess { get; set; }
+    public StreamWriter? ClaudeInput { get; set; }
 
     public StringBuilder AssistantText { get; } = new();
     public StringBuilder ReasoningText { get; } = new();

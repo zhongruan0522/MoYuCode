@@ -5,11 +5,16 @@ import {
   useMemo,
   useRef,
   useState,
+  isValidElement,
   type Dispatch,
   type ReactNode,
   type SetStateAction,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { jsonrepair } from 'jsonrepair'
+import ReactMarkdown from 'react-markdown'
+import remarkBreaks from 'remark-breaks'
+import remarkGfm from 'remark-gfm'
 import { api } from '@/api/client'
 import type { ProjectDto, ProviderDto, ToolType } from '@/api/types'
 import type { CodeSelection, WorkspaceFileRef } from '@/lib/chatPromptXml'
@@ -18,6 +23,7 @@ import { cn } from '@/lib/utils'
 import { getVscodeFileIconUrl } from '@/lib/vscodeFileIcons'
 import { DiffViewer } from '@/components/DiffViewer'
 import { MonacoCode } from '@/components/MonacoCode'
+import { ShikiCode } from '@/components/ShikiCode'
 import { Modal } from '@/components/Modal'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -300,17 +306,106 @@ function normalizeNewlines(value: string): string {
   return (value ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
 }
 
+function tryExtractFirstJsonValueSlice(
+  value: string,
+): { jsonText: string; trailingText: string } | null {
+  const raw = (value ?? '').trim()
+  if (!raw) return null
+
+  const firstObj = raw.indexOf('{')
+  const firstArr = raw.indexOf('[')
+
+  let start = -1
+  if (firstObj >= 0 && (firstArr < 0 || firstObj < firstArr)) start = firstObj
+  else start = firstArr
+
+  if (start < 0) return null
+
+  const stack: Array<'{' | '['> = []
+  let inString = false
+  let escapeNext = false
+
+  for (let i = start; i < raw.length; i += 1) {
+    const ch = raw[i]
+
+    if (inString) {
+      if (escapeNext) {
+        escapeNext = false
+        continue
+      }
+      if (ch === '\\') {
+        escapeNext = true
+        continue
+      }
+      if (ch === '"') inString = false
+      continue
+    }
+
+    if (ch === '"') {
+      inString = true
+      continue
+    }
+
+    if (ch === '{' || ch === '[') {
+      stack.push(ch)
+      continue
+    }
+
+    if (ch === '}' || ch === ']') {
+      const expected = ch === '}' ? '{' : '['
+      if (!stack.length || stack[stack.length - 1] !== expected) return null
+      stack.pop()
+      if (stack.length === 0) {
+        return {
+          jsonText: raw.slice(start, i + 1),
+          trailingText: raw.slice(i + 1),
+        }
+      }
+    }
+  }
+
+  return null
+}
+
 function tryParseJsonRecord(value: string): Record<string, unknown> | null {
   const raw = (value ?? '').trim()
   if (!raw) return null
-  if (!raw.startsWith('{')) return null
-  try {
-    const parsed = JSON.parse(raw) as unknown
+
+  const start = raw.indexOf('{')
+  if (start < 0) return null
+  const end = raw.lastIndexOf('}')
+  const wideCandidate = end > start ? raw.slice(start, end + 1) : raw.slice(start)
+  const balancedCandidate = tryExtractFirstJsonValueSlice(raw)?.jsonText ?? null
+
+  const parseRecord = (jsonText: string): Record<string, unknown> | null => {
+    const parsed = JSON.parse(jsonText) as unknown
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
     return parsed as Record<string, unknown>
-  } catch {
-    return null
   }
+
+  const candidates = [balancedCandidate, wideCandidate].filter((c): c is string => Boolean(c))
+  const seen = new Set<string>()
+
+  for (const candidate of candidates) {
+    if (seen.has(candidate)) continue
+    seen.add(candidate)
+
+    try {
+      const parsed = parseRecord(candidate)
+      if (parsed) return parsed
+    } catch {
+      // ignore
+    }
+
+    try {
+      const parsed = parseRecord(jsonrepair(candidate))
+      if (parsed) return parsed
+    } catch {
+      // ignore
+    }
+  }
+
+  return null
 }
 
 function readFirstString(obj: Record<string, unknown>, keys: string[]): string | null {
@@ -346,19 +441,70 @@ function isEditToolName(toolName: string): boolean {
   return key === 'edit' || key.endsWith('edit') || key.includes('mcpclaudeedit')
 }
 
+function isAskUserQuestionToolName(toolName: string): boolean {
+  const key = normalizeToolNameKey(toolName)
+  return (
+    key === 'askuserquestion' ||
+    key.endsWith('askuserquestion') ||
+    key.includes('mcpclaudeaskuserquestion')
+  )
+}
+
+function isReadToolName(toolName: string): boolean {
+  const key = normalizeToolNameKey(toolName)
+  return key === 'read' || key.endsWith('read') || key.includes('mcpclauderead')
+}
+
+function isTodoWriteToolName(toolName: string): boolean {
+  const key = normalizeToolNameKey(toolName)
+  return key === 'todowrite' || key.endsWith('todowrite') || key.includes('mcpclaudetodowrite')
+}
+
+function isTaskToolName(toolName: string): boolean {
+  const key = normalizeToolNameKey(toolName)
+  return key === 'task' || key.endsWith('task')
+}
+
 function shouldAutoOpenClaudeTool(toolName: string): boolean {
-  return isWriteToolName(toolName) || isEditToolName(toolName)
+  return (
+    isWriteToolName(toolName) ||
+    isEditToolName(toolName) ||
+    isAskUserQuestionToolName(toolName) ||
+    isReadToolName(toolName) ||
+    isTodoWriteToolName(toolName)
+  )
+}
+
+function unwrapToolArgsRecord(obj: Record<string, unknown>): Record<string, unknown> {
+  const tryReadRecord = (value: unknown): Record<string, unknown> | null => {
+    if (!value) return null
+    if (typeof value === 'string') return tryParseJsonRecord(value)
+    if (typeof value !== 'object' || Array.isArray(value)) return null
+    return value as Record<string, unknown>
+  }
+
+  return (
+    tryReadRecord(obj.args) ??
+    tryReadRecord(obj.arguments) ??
+    tryReadRecord(obj.toolArgs) ??
+    tryReadRecord(obj.tool_args) ??
+    tryReadRecord(obj.input) ??
+    tryReadRecord(obj.parameters) ??
+    tryReadRecord(obj.params) ??
+    obj
+  )
 }
 
 function tryParseWriteToolInput(input: string): { filePath: string; content: string } | null {
   const obj = tryParseJsonRecord(input)
   if (!obj) return null
+  const args = unwrapToolArgsRecord(obj)
 
   const filePath =
-    readFirstNonEmptyString(obj, ['file_path', 'filePath', 'path']) ??
-    readFirstNonEmptyString(obj, ['file', 'target', 'targetPath'])
+    readFirstNonEmptyString(args, ['file_path', 'filePath', 'path']) ??
+    readFirstNonEmptyString(args, ['file', 'target', 'targetPath'])
 
-  const content = readFirstString(obj, ['content', 'text'])
+  const content = readFirstString(args, ['content', 'text'])
 
   if (!filePath) return null
   if (content == null) return null
@@ -373,34 +519,434 @@ function tryParseEditToolInput(input: string): {
 } | null {
   const obj = tryParseJsonRecord(input)
   if (!obj) return null
+  const args = unwrapToolArgsRecord(obj)
 
   const filePath =
-    readFirstNonEmptyString(obj, ['file_path', 'filePath', 'path']) ??
-    readFirstNonEmptyString(obj, ['file', 'target', 'targetPath'])
+    readFirstNonEmptyString(args, ['file_path', 'filePath', 'path']) ??
+    readFirstNonEmptyString(args, ['file', 'target', 'targetPath'])
 
-  const oldString = readFirstString(obj, ['old_string', 'oldString'])
-  const newString = readFirstString(obj, ['new_string', 'newString'])
-  const replaceAll = obj.replace_all === true || obj.replaceAll === true
+  const oldString = readFirstString(args, ['old_string', 'oldString'])
+  const newString = readFirstString(args, ['new_string', 'newString'])
+  const replaceAll = args.replace_all === true || args.replaceAll === true
 
   if (!filePath) return null
   if (oldString == null || newString == null) return null
   return { filePath, oldString, newString, replaceAll }
 }
 
+function tryParseReadToolInput(input: string): { filePath: string } | null {
+  const obj = tryParseJsonRecord(input)
+  if (!obj) return null
+  const args = unwrapToolArgsRecord(obj)
+
+  const filePath =
+    readFirstNonEmptyString(args, ['file_path', 'filePath', 'path']) ??
+    readFirstNonEmptyString(args, ['file', 'target', 'targetPath'])
+
+  if (!filePath) return null
+  return { filePath }
+}
+
+type TodoWriteStatus = 'pending' | 'in_progress' | 'completed'
+
+type TodoWriteToolTodo = {
+  content: string
+  activeForm: string
+  status: TodoWriteStatus
+}
+
+type TodoWriteToolInput = {
+  todos: TodoWriteToolTodo[]
+}
+
+function normalizeTodoWriteStatus(value: unknown): TodoWriteStatus {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  const key = raw.toLowerCase().replace(/[^a-z0-9]+/g, '_')
+  if (key === 'completed' || key === 'done') return 'completed'
+  if (key === 'in_progress' || key === 'inprogress' || key === 'running') return 'in_progress'
+  return 'pending'
+}
+
+function tryParseTodoWriteToolInput(input: string): TodoWriteToolInput | null {
+  const obj = tryParseJsonRecord(input)
+  if (!obj) return null
+  const args = unwrapToolArgsRecord(obj)
+
+  const todosValue = args.todos
+  if (!Array.isArray(todosValue)) return null
+
+  const todos: TodoWriteToolTodo[] = []
+  for (const todoValue of todosValue) {
+    if (!todoValue || typeof todoValue !== 'object' || Array.isArray(todoValue)) continue
+    const todoObj = todoValue as Record<string, unknown>
+    const content = typeof todoObj.content === 'string' ? todoObj.content.trim() : ''
+    const activeForm = typeof todoObj.activeForm === 'string' ? todoObj.activeForm.trim() : ''
+    const status = normalizeTodoWriteStatus(todoObj.status)
+
+    const normalizedContent = content || activeForm
+    if (!normalizedContent) continue
+
+    todos.push({
+      content: normalizedContent,
+      activeForm: activeForm || normalizedContent,
+      status,
+    })
+  }
+
+  return { todos }
+}
+
+type TaskToolInput = {
+  subagentType: string
+  description: string
+  prompt: string
+}
+
+function tryParseTaskToolInput(input: string): TaskToolInput | null {
+  const obj = tryParseJsonRecord(input)
+  if (!obj) return null
+  const args = unwrapToolArgsRecord(obj)
+
+  const subagentType =
+    readFirstNonEmptyString(args, ['subagent_type', 'subagentType', 'subagent', 'agentType']) ?? ''
+  const description = readFirstNonEmptyString(args, ['description', 'desc']) ?? ''
+  const prompt = readFirstString(args, ['prompt']) ?? ''
+
+  if (!subagentType && !description && !prompt.trim()) return null
+  return { subagentType, description, prompt }
+}
+
+function tryParseJsonValue(value: string): unknown | null {
+  const trimmed = (value ?? '').trim()
+  if (!trimmed) return null
+
+  try {
+    return JSON.parse(trimmed) as unknown
+  } catch {
+    // ignore
+  }
+
+  try {
+    return JSON.parse(jsonrepair(trimmed)) as unknown
+  } catch {
+    return null
+  }
+}
+
+function tryExtractReadToolOutput(output: string): string | null {
+  const trimmed = (output ?? '').trim()
+  if (!trimmed) return null
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null
+
+  const parsed = tryParseJsonValue(trimmed)
+  if (!parsed) return null
+
+  const extract = (value: unknown): { filePath?: string; content: string } | null => {
+    if (value == null) return null
+
+    if (typeof value === 'string') {
+      const nestedTrimmed = value.trim()
+      if (nestedTrimmed.startsWith('{') || nestedTrimmed.startsWith('[')) {
+        const nested = tryParseJsonValue(nestedTrimmed)
+        const nestedExtracted = nested ? extract(nested) : null
+        if (nestedExtracted) return nestedExtracted
+      }
+      return { content: value }
+    }
+
+    if (Array.isArray(value)) {
+      const parts: string[] = []
+      for (const entry of value) {
+        const extracted = extract(entry)
+        if (!extracted) continue
+        if (extracted.content) parts.push(extracted.content)
+      }
+      const joined = parts.join('\n').trimEnd()
+      return joined ? { content: joined } : null
+    }
+
+    if (typeof value !== 'object') return null
+    const obj = value as Record<string, unknown>
+
+    const fileValue = obj.file
+    if (fileValue && typeof fileValue === 'object' && !Array.isArray(fileValue)) {
+      const fileObj = fileValue as Record<string, unknown>
+      const content = typeof fileObj.content === 'string' ? fileObj.content : null
+      if (content != null) {
+        const filePath =
+          (typeof fileObj.filePath === 'string' ? fileObj.filePath : undefined) ??
+          (typeof fileObj.file_path === 'string' ? fileObj.file_path : undefined)
+        return { filePath, content }
+      }
+    }
+
+    const contentValue = obj.content
+    if (typeof contentValue === 'string') return { content: contentValue }
+
+    const textValue = obj.text
+    if (typeof textValue === 'string') {
+      const nestedTrimmed = textValue.trim()
+      if (nestedTrimmed.startsWith('{') || nestedTrimmed.startsWith('[')) {
+        const nested = tryParseJsonValue(nestedTrimmed)
+        const nestedExtracted = nested ? extract(nested) : null
+        if (nestedExtracted) return nestedExtracted
+      }
+      return { content: textValue }
+    }
+
+    const dataValue = obj.data
+    if (dataValue) return extract(dataValue)
+
+    return null
+  }
+
+  const extracted = extract(parsed)
+  if (!extracted?.content) return null
+  return extracted.content
+}
+
+function normalizeReadToolOutputForMonaco(output: string): string {
+  const normalized = normalizeNewlines(output ?? '')
+  if (!normalized) return ''
+
+  const lines = normalized.split('\n')
+  if (lines.length < 2) return normalized
+
+  const patterns: RegExp[] = [
+    /^\s*(\d+)\t(.*)$/,
+    /^\s*(\d+)\s*->\s?(.*)$/,
+    /^\s*(\d+)\s*→\s?(.*)$/,
+  ]
+
+  for (const pattern of patterns) {
+    const matches = lines.map((line) => pattern.exec(line))
+    const matchedCount = matches.reduce((acc, m) => acc + (m ? 1 : 0), 0)
+    if (matchedCount < Math.max(2, Math.floor(lines.length * 0.8))) continue
+
+    let numCount = 0
+    let seqCount = 0
+    let prevNum: number | null = null
+    for (const match of matches) {
+      if (!match) continue
+      const num = Number(match[1])
+      if (!Number.isFinite(num)) continue
+      if (prevNum != null && num === prevNum + 1) seqCount += 1
+      prevNum = num
+      numCount += 1
+    }
+
+    if (numCount > 2 && seqCount < Math.floor((numCount - 1) * 0.6)) continue
+
+    return matches.map((m, idx) => (m ? m[2] : lines[idx])).join('\n')
+  }
+
+  return normalized
+}
+
+type AskUserQuestionToolOption = {
+  label: string
+  description: string
+  value?: string
+}
+
+type AskUserQuestionToolQuestion = {
+  header: string
+  question: string
+  multiSelect: boolean
+  options: AskUserQuestionToolOption[]
+}
+
+type AskUserQuestionToolInput = {
+  questions: AskUserQuestionToolQuestion[]
+  answers?: Record<string, string>
+}
+
+function tryParseAskUserQuestionToolInput(input: string): AskUserQuestionToolInput | null {
+  const obj = tryParseJsonRecord(input)
+  if (!obj) return null
+  const args = unwrapToolArgsRecord(obj)
+
+  const questionsValue = args.questions
+  if (!Array.isArray(questionsValue) || questionsValue.length === 0) return null
+
+  const questions: AskUserQuestionToolQuestion[] = []
+  for (const questionValue of questionsValue) {
+    if (!questionValue || typeof questionValue !== 'object') continue
+    const questionObj = questionValue as Record<string, unknown>
+
+    const questionText = typeof questionObj.question === 'string' ? questionObj.question.trim() : ''
+    if (!questionText) continue
+
+    const header = typeof questionObj.header === 'string' ? questionObj.header.trim() : ''
+    const multiSelect = questionObj.multiSelect === true || questionObj.multi_select === true
+
+    const optionsValue = questionObj.options
+    if (!Array.isArray(optionsValue) || optionsValue.length < 2) continue
+
+    const options: AskUserQuestionToolOption[] = []
+    for (const optionValue of optionsValue) {
+      if (!optionValue || typeof optionValue !== 'object') continue
+      const optionObj = optionValue as Record<string, unknown>
+      const label = typeof optionObj.label === 'string' ? optionObj.label.trim() : ''
+      if (!label) continue
+      const description = typeof optionObj.description === 'string' ? optionObj.description.trim() : ''
+      const value = typeof optionObj.value === 'string' ? optionObj.value.trim() : undefined
+      options.push(value ? { label, description, value } : { label, description })
+    }
+
+    if (options.length < 2) continue
+    questions.push({ header, question: questionText, multiSelect, options })
+  }
+
+  if (questions.length === 0) return null
+
+  let answers: Record<string, string> | undefined
+  const answersValue = args.answers
+  if (answersValue && typeof answersValue === 'object' && !Array.isArray(answersValue)) {
+    const next: Record<string, string> = {}
+    for (const [key, value] of Object.entries(answersValue as Record<string, unknown>)) {
+      if (typeof value === 'string') {
+        next[key] = value
+      }
+    }
+    if (Object.keys(next).length > 0) {
+      answers = next
+    }
+  }
+
+  return answers ? { questions, answers } : { questions }
+}
+
+type ReplacementLineDiffOp = { type: 'equal' | 'add' | 'del'; text: string }
+
+function splitTextLinesForDiff(value: string): string[] {
+  const normalized = normalizeNewlines(value ?? '')
+  if (!normalized) return []
+
+  const withoutFinalNewline = normalized.endsWith('\n') ? normalized.slice(0, -1) : normalized
+  if (!withoutFinalNewline) return []
+
+  return withoutFinalNewline.split('\n')
+}
+
+function backtrackMyersDiff(
+  trace: number[][],
+  oldLines: string[],
+  newLines: string[],
+  offset: number,
+): ReplacementLineDiffOp[] {
+  let x = oldLines.length
+  let y = newLines.length
+  const ops: ReplacementLineDiffOp[] = []
+
+  for (let d = trace.length - 1; d > 0; d -= 1) {
+    const vPrev = trace[d - 1]
+    const k = x - y
+
+    const prevK =
+      k === -d || (k !== d && (vPrev[k - 1 + offset] ?? 0) < (vPrev[k + 1 + offset] ?? 0))
+        ? k + 1
+        : k - 1
+
+    const prevX = vPrev[prevK + offset] ?? 0
+    const prevY = prevX - prevK
+
+    while (x > prevX && y > prevY) {
+      ops.push({ type: 'equal', text: oldLines[x - 1] ?? '' })
+      x -= 1
+      y -= 1
+    }
+
+    if (x === prevX) {
+      ops.push({ type: 'add', text: newLines[y - 1] ?? '' })
+      y -= 1
+    } else {
+      ops.push({ type: 'del', text: oldLines[x - 1] ?? '' })
+      x -= 1
+    }
+  }
+
+  while (x > 0 && y > 0) {
+    ops.push({ type: 'equal', text: oldLines[x - 1] ?? '' })
+    x -= 1
+    y -= 1
+  }
+
+  while (x > 0) {
+    ops.push({ type: 'del', text: oldLines[x - 1] ?? '' })
+    x -= 1
+  }
+
+  while (y > 0) {
+    ops.push({ type: 'add', text: newLines[y - 1] ?? '' })
+    y -= 1
+  }
+
+  return ops.reverse()
+}
+
+function computeMyersLineDiff(oldLines: string[], newLines: string[]): ReplacementLineDiffOp[] {
+  const n = oldLines.length
+  const m = newLines.length
+  const max = n + m
+  const offset = max
+
+  const v = new Array<number>(2 * max + 1).fill(0)
+  const trace: number[][] = []
+
+  for (let d = 0; d <= max; d += 1) {
+    const nextV = v.slice()
+
+    for (let k = -d; k <= d; k += 2) {
+      const kIndex = k + offset
+
+      let x: number
+      if (k === -d || (k !== d && v[k + 1 + offset] > v[k - 1 + offset])) {
+        x = v[k + 1 + offset]
+      } else {
+        x = v[k - 1 + offset] + 1
+      }
+
+      let y = x - k
+
+      while (x < n && y < m && oldLines[x] === newLines[y]) {
+        x += 1
+        y += 1
+      }
+
+      nextV[kIndex] = x
+
+      if (x >= n && y >= m) {
+        trace.push(nextV)
+        return backtrackMyersDiff(trace, oldLines, newLines, offset)
+      }
+    }
+
+    trace.push(nextV)
+    for (let i = 0; i < nextV.length; i += 1) v[i] = nextV[i]
+  }
+
+  return backtrackMyersDiff(trace, oldLines, newLines, offset)
+}
+
 function buildReplacementDiff(filePath: string, oldString: string, newString: string): string {
   const path = (filePath ?? '').replace(/\\/g, '/')
-  const oldLines = normalizeNewlines(oldString).split('\n')
-  const newLines = normalizeNewlines(newString).split('\n')
+  const oldLines = splitTextLinesForDiff(oldString)
+  const newLines = splitTextLinesForDiff(newString)
+
+  const ops = computeMyersLineDiff(oldLines, newLines).filter((op) => op.type !== 'equal')
+  if (!ops.length) return ''
 
   const oldCount = Math.max(1, oldLines.length)
   const newCount = Math.max(1, newLines.length)
 
   const hunk = `@@ -1,${oldCount} +1,${newCount} @@`
 
-  const oldBlock = oldLines.map((line) => `-${line}`).join('\n')
-  const newBlock = newLines.map((line) => `+${line}`).join('\n')
+  const body = ops
+    .map((op) => `${op.type === 'add' ? '+' : '-'}${op.text}`)
+    .join('\n')
 
-  return `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n${hunk}\n${oldBlock}\n${newBlock}`
+  return `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n${hunk}\n${body}`
 }
 
 type MentionToken = {
@@ -546,6 +1092,71 @@ function stringifyToolArgs(value: unknown): string {
   } catch {
     return String(value)
   }
+}
+
+function sortJsonValue(value: unknown): unknown {
+  if (value == null) return value
+  if (Array.isArray(value)) return value.map((v) => sortJsonValue(v))
+  if (typeof value !== 'object') return value
+
+  const obj = value as Record<string, unknown>
+  const next: Record<string, unknown> = {}
+  const keys = Object.keys(obj).sort((a, b) => a.localeCompare(b))
+  for (const key of keys) {
+    next[key] = sortJsonValue(obj[key])
+  }
+  return next
+}
+
+function tryStableJsonStringify(value: unknown): string | null {
+  try {
+    return JSON.stringify(sortJsonValue(value))
+  } catch {
+    return null
+  }
+}
+
+function mergeStreamingToolText(existing: string, incoming: string): string {
+  const prev = existing ?? ''
+  const next = incoming ?? ''
+
+  if (!next) return prev
+  if (!prev) return next
+  if (next === prev) return prev
+
+  if (next.startsWith(prev)) return next
+  if (prev.startsWith(next)) return prev
+  if (next.includes(prev)) return next
+  if (prev.includes(next)) return prev
+
+  const prevRecord = tryParseJsonRecord(prev)
+  const nextRecord = tryParseJsonRecord(next)
+  if (prevRecord && nextRecord) {
+    const stablePrev = tryStableJsonStringify(prevRecord)
+    const stableNext = tryStableJsonStringify(nextRecord)
+    if (stablePrev && stablePrev === stableNext) {
+      const prevTrimmed = prev.trim()
+      const nextTrimmed = next.trim()
+      const prevSlice = tryExtractFirstJsonValueSlice(prevTrimmed)
+      const nextSlice = tryExtractFirstJsonValueSlice(nextTrimmed)
+      const prevIsWholeJson =
+        Boolean(prevSlice) && prevTrimmed === prevSlice?.jsonText && !prevSlice?.trailingText.trim()
+      const nextIsWholeJson =
+        Boolean(nextSlice) && nextTrimmed === nextSlice?.jsonText && !nextSlice?.trailingText.trim()
+
+      if (prevIsWholeJson !== nextIsWholeJson) {
+        return prevIsWholeJson ? prev : next
+      }
+
+      if (!prevIsWholeJson && !nextIsWholeJson) {
+        return prev.length <= next.length ? prev : next
+      }
+
+      return prev.length >= next.length ? prev : next
+    }
+  }
+
+  return prev + next
 }
 
 type CodexToolCallInfo = {
@@ -929,98 +1540,614 @@ const ChatThinkMessage = memo(function ChatThinkMessage({
   )
 })
 
-const ChatToolMessage = memo(function ChatToolMessage({
-  message,
-  align,
-  open,
-  onToggle,
+const askUserQuestionOtherValue = '__other__'
+
+type AskUserQuestionAnswerDraft = {
+  selectedValues: string[]
+  otherText: string
+}
+
+function getAskUserQuestionOptionValue(option: AskUserQuestionToolOption): string {
+  const value = (option.value ?? '').trim()
+  return value || option.label.trim()
+}
+
+function buildAskUserQuestionAnswerText(
+  question: AskUserQuestionToolQuestion,
+  draft: AskUserQuestionAnswerDraft | undefined,
+): string {
+  if (!draft) return ''
+  const selected = draft.selectedValues ?? []
+  const otherText = (draft.otherText ?? '').trim()
+
+  if (question.multiSelect) {
+    const explicit = selected.filter((v) => v && v !== askUserQuestionOtherValue)
+    const parts = selected.includes(askUserQuestionOtherValue)
+      ? otherText
+        ? [...explicit, otherText]
+        : explicit
+      : explicit
+    return parts.join(', ')
+  }
+
+  const first = selected[0] ?? ''
+  if (first === askUserQuestionOtherValue) return otherText
+  return first
+}
+
+const ClaudeAskUserQuestionTool = memo(function ClaudeAskUserQuestionTool({
+  input,
+  disabled,
+  onSubmit,
 }: {
-  message: ChatMessage
-  align: ChatAlign
-  open: boolean
-  onToggle: (id: string) => void
+  input: AskUserQuestionToolInput
+  disabled: boolean
+  onSubmit: (answers: Record<string, string>) => void
 }) {
-  const toolName = message.toolName ?? 'tool'
-  const argsPreview = message.text ? truncateInlineText(message.text, 120) : ''
+  const questionKey = useMemo(
+    () => input.questions.map((q) => q.question).join('\n'),
+    [input.questions],
+  )
+
+  const [draftByQuestion, setDraftByQuestion] = useState<Record<string, AskUserQuestionAnswerDraft>>({})
+  const [submitted, setSubmitted] = useState(false)
+
+  useEffect(() => {
+    setSubmitted(false)
+    setDraftByQuestion((prev) => {
+      const next: Record<string, AskUserQuestionAnswerDraft> = {}
+      for (const q of input.questions) {
+        next[q.question] = prev[q.question] ?? { selectedValues: [], otherText: '' }
+      }
+      return next
+    })
+  }, [questionKey, input.questions])
+
+  const setSelectedValues = useCallback(
+    (question: AskUserQuestionToolQuestion, value: string) => {
+      setDraftByQuestion((prev) => {
+        const existing = prev[question.question] ?? { selectedValues: [], otherText: '' }
+        const selected = existing.selectedValues ?? []
+        const nextSelected = question.multiSelect
+          ? selected.includes(value)
+            ? selected.filter((v) => v !== value)
+            : [...selected, value]
+          : [value]
+
+        const shouldClearOther = !nextSelected.includes(askUserQuestionOtherValue)
+        return {
+          ...prev,
+          [question.question]: {
+            selectedValues: nextSelected,
+            otherText: shouldClearOther ? '' : existing.otherText,
+          },
+        }
+      })
+    },
+    [setDraftByQuestion],
+  )
+
+  const setOtherText = useCallback(
+    (questionText: string, nextText: string) => {
+      setDraftByQuestion((prev) => ({
+        ...prev,
+        [questionText]: {
+          ...(prev[questionText] ?? { selectedValues: [], otherText: '' }),
+          otherText: nextText,
+        },
+      }))
+    },
+    [setDraftByQuestion],
+  )
+
+  const allAnswered = useMemo(() => {
+    return input.questions.every((q) => {
+      const answer = buildAskUserQuestionAnswerText(q, draftByQuestion[q.question])
+      return Boolean(answer.trim())
+    })
+  }, [draftByQuestion, input.questions])
+
+  const submit = useCallback(() => {
+    const answers: Record<string, string> = {}
+    for (const q of input.questions) {
+      const answer = buildAskUserQuestionAnswerText(q, draftByQuestion[q.question]).trim()
+      if (answer) {
+        const key = (q.header ?? '').trim() || q.question
+        answers[key] = answer
+      }
+    }
+    setSubmitted(true)
+    onSubmit(answers)
+  }, [draftByQuestion, input.questions, onSubmit])
 
   return (
-    <ChatMessageRow align={align}>
-      <div className="max-w-[80%] overflow-hidden rounded-lg border bg-muted/30 text-foreground">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className={cn(
-            '!h-auto w-full items-start justify-between gap-3 px-3 py-2 text-xs font-medium text-muted-foreground',
-            'hover:bg-accent/40',
-            '!rounded-none',
-          )}
-          aria-expanded={open}
-          aria-controls={`tool-${message.id}`}
-          onClick={() => onToggle(message.id)}
-        >
-          <span className="min-w-0 flex-1">
-            <span className="flex items-center gap-2">{toolName}</span>
-            {argsPreview ? (
-              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
-                {argsPreview}
-              </span>
-            ) : null}
-          </span>
-          <ChevronDown
-            className={cn(
-              'mt-0.5 size-4 shrink-0 transition-transform',
-              open ? 'rotate-0' : '-rotate-90',
-            )}
-          />
-        </Button>
+    <div className="space-y-3">
+      <div className="text-[11px] font-medium text-muted-foreground">AskUserQuestion</div>
+      {input.questions.map((q) => {
+        const draft = draftByQuestion[q.question]
+        const selectedValues = draft?.selectedValues ?? []
+        const otherSelected = selectedValues.includes(askUserQuestionOtherValue)
+        const options = q.options.map((o) => ({
+          ...o,
+          resolvedValue: getAskUserQuestionOptionValue(o),
+        }))
+        const effectiveDisabled = disabled || submitted
 
-        {open ? (
-          <pre
-            id={`tool-${message.id}`}
-            className="px-3 pb-3 text-xs whitespace-pre-wrap break-words"
-          >
-            {message.text}
-          </pre>
-        ) : null}
+        return (
+          <div key={q.question} className="space-y-2 rounded-md border bg-background/60 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {q.header ? (
+                <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+                  {q.header}
+                </Badge>
+              ) : null}
+              {q.multiSelect ? (
+                <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                  multi_select
+                </Badge>
+              ) : null}
+            </div>
+
+            <div className="text-sm">{q.question}</div>
+
+            <div className="space-y-1.5">
+              {options.map((o) => {
+                const isSelected = selectedValues.includes(o.resolvedValue)
+                return (
+                  <Button
+                    key={o.resolvedValue}
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={effectiveDisabled}
+                    onClick={() => setSelectedValues(q, o.resolvedValue)}
+                    className={cn(
+                      'h-auto w-full items-start justify-start gap-2 px-2 py-2 text-left',
+                      isSelected ? 'bg-accent text-foreground hover:bg-accent' : 'hover:bg-accent/50',
+                    )}
+                  >
+                    <span className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center">
+                      {isSelected ? <Check className="size-4" /> : null}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm">{o.label}</span>
+                      {o.description ? (
+                        <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                          {o.description}
+                        </span>
+                      ) : null}
+                    </span>
+                  </Button>
+                )
+              })}
+
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={effectiveDisabled}
+                onClick={() => setSelectedValues(q, askUserQuestionOtherValue)}
+                className={cn(
+                  'h-auto w-full items-start justify-start gap-2 px-2 py-2 text-left',
+                  otherSelected ? 'bg-accent text-foreground hover:bg-accent' : 'hover:bg-accent/50',
+                )}
+              >
+                <span className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center">
+                  {otherSelected ? <Check className="size-4" /> : null}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm">Other</span>
+                  <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                    {q.multiSelect ? 'Type something (optional).' : 'Type something.'}
+                  </span>
+                </span>
+              </Button>
+
+              {otherSelected ? (
+                <Input
+                  value={draft?.otherText ?? ''}
+                  disabled={effectiveDisabled}
+                  placeholder={q.multiSelect ? 'Type something…' : 'Type something…'}
+                  onChange={(e) => setOtherText(q.question, e.target.value)}
+                />
+              ) : null}
+            </div>
+          </div>
+        )
+      })}
+
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <Button type="button" size="sm" disabled={disabled || submitted || !allAnswered} onClick={submit}>
+          Submit
+        </Button>
       </div>
-    </ChatMessageRow>
+    </div>
   )
 })
 
-const ChatClaudeToolMessage = memo(function ChatClaudeToolMessage({
+const ClaudeTodoWriteTool = memo(function ClaudeTodoWriteTool({
+  input,
+  showHeader = true,
+  showActiveForm = true,
+}: {
+  input: TodoWriteToolInput
+  showHeader?: boolean
+  showActiveForm?: boolean
+}) {
+  const todos = input.todos
+
+  return (
+    <div className="space-y-2">
+      {showHeader ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-[11px] font-medium text-muted-foreground">Todo</div>
+          <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+            {todos.length} item{todos.length === 1 ? '' : 's'}
+          </Badge>
+        </div>
+      ) : null}
+
+      {todos.length ? (
+        <div className="max-h-[240px] overflow-auto rounded-md border bg-background/60">
+          <div className="space-y-1 p-2">
+            {todos.map((todo, idx) => {
+              const statusClass =
+                todo.status === 'completed'
+                  ? 'bg-emerald-500/15 text-emerald-300 ring-emerald-500/30'
+                  : todo.status === 'in_progress'
+                    ? 'bg-sky-500/15 text-sky-300 ring-sky-500/30'
+                    : 'bg-muted/40 text-muted-foreground ring-border/60'
+
+              const statusIcon =
+                todo.status === 'completed' ? (
+                  <Check className="size-4 text-emerald-400" />
+                ) : todo.status === 'in_progress' ? (
+                  <Spinner className="size-3 text-sky-300" />
+                ) : (
+                  <span className="size-2 rounded-full bg-muted-foreground/60" />
+                )
+
+              return (
+                <div
+                  key={`${todo.content}-${idx}`}
+                  className="flex items-start gap-2 rounded-md px-2 py-2 hover:bg-accent/40"
+                >
+                  <span className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center">
+                    {statusIcon}
+                  </span>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm leading-snug">{todo.content}</div>
+                    {showActiveForm && todo.activeForm && todo.activeForm !== todo.content ? (
+                      <div className="mt-0.5 text-[11px] text-muted-foreground">{todo.activeForm}</div>
+                    ) : null}
+                  </div>
+
+                  <Badge variant="outline" className={cn('h-5 px-1.5 text-[10px] ring-1', statusClass)}>
+                    {todo.status}
+                  </Badge>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ) : (
+        <div className="text-xs text-muted-foreground">（无 todo）</div>
+      )}
+    </div>
+  )
+})
+
+function formatToolCallCount(count: number): string {
+  const n = Math.max(0, count)
+  return `${n} tool call${n === 1 ? '' : 's'}`
+}
+
+function computeReplacementDiffStats(oldString: string, newString: string): { added: number; removed: number } {
+  const oldLines = splitTextLinesForDiff(oldString)
+  const newLines = splitTextLinesForDiff(newString)
+  const ops = computeMyersLineDiff(oldLines, newLines)
+
+  let added = 0
+  let removed = 0
+  for (const op of ops) {
+    if (op.type === 'add') added += 1
+    else if (op.type === 'del') removed += 1
+  }
+
+  return { added, removed }
+}
+
+const ChatToolCallItem = memo(function ChatToolCallItem({
   message,
-  align,
-  open,
+  toolType,
+  openById,
   onToggle,
+  onSubmitAskUserQuestion,
+  askUserQuestionDisabled,
 }: {
   message: ChatMessage
-  align: ChatAlign
-  open: boolean
+  toolType: ToolType
+  openById: OpenById
   onToggle: (id: string) => void
+  onSubmitAskUserQuestion?: (toolUseId: string, answers: Record<string, string>, messageId: string) => void
+  askUserQuestionDisabled: boolean
 }) {
+  const open = openById[message.id] ?? false
   const toolName = message.toolName ?? 'tool'
   const input = message.toolInput ?? message.text ?? ''
   const output = message.toolOutput ?? ''
   const isError = Boolean(message.toolIsError)
+  const isClaude = toolType === 'ClaudeCode'
 
+  const askInput = useMemo(
+    () =>
+      isClaude && isAskUserQuestionToolName(toolName) ? tryParseAskUserQuestionToolInput(input) : null,
+    [input, isClaude, toolName],
+  )
   const writeInput = useMemo(
     () => (isWriteToolName(toolName) ? tryParseWriteToolInput(input) : null),
+    [input, toolName],
+  )
+  const readInput = useMemo(
+    () => (isReadToolName(toolName) ? tryParseReadToolInput(input) : null),
     [input, toolName],
   )
   const editInput = useMemo(
     () => (isEditToolName(toolName) ? tryParseEditToolInput(input) : null),
     [input, toolName],
   )
+  const todoWriteInput = useMemo(
+    () => (isTodoWriteToolName(toolName) ? tryParseTodoWriteToolInput(input) : null),
+    [input, toolName],
+  )
+  const taskInput = useMemo(
+    () => (isTaskToolName(toolName) ? tryParseTaskToolInput(input) : null),
+    [input, toolName],
+  )
 
-  const inputPreview = writeInput?.filePath
-    ? `File: ${truncateInlineText(writeInput.filePath, 120)}`
-    : editInput?.filePath
-      ? `File: ${truncateInlineText(editInput.filePath, 120)}`
-      : input
-        ? truncateInlineText(input, 120)
-        : ''
-  const outputPreview = output ? truncateInlineText(output, 120) : ''
+  const diffStats = useMemo(() => {
+    if (!editInput) return null
+    if (normalizeNewlines(editInput.oldString) === normalizeNewlines(editInput.newString)) {
+      return null
+    }
+    return computeReplacementDiffStats(editInput.oldString, editInput.newString)
+  }, [editInput])
+
+  const editDiff = useMemo(() => {
+    if (!editInput) return ''
+    if (normalizeNewlines(editInput.oldString) === normalizeNewlines(editInput.newString)) {
+      return ''
+    }
+    return buildReplacementDiff(editInput.filePath, editInput.oldString, editInput.newString)
+  }, [editInput])
+
+  const readCode = useMemo(() => {
+    if (!readInput) return null
+    const extracted = tryExtractReadToolOutput(output)
+    return normalizeReadToolOutputForMonaco(extracted ?? output)
+  }, [output, readInput])
+
+  const title = editInput
+    ? `Edit ${getBaseName(editInput.filePath)}`
+    : writeInput
+      ? `Write ${getBaseName(writeInput.filePath)}`
+      : readInput
+        ? `Read ${getBaseName(readInput.filePath)}`
+        : taskInput
+          ? `Task${taskInput.subagentType ? ` ${taskInput.subagentType}` : ''}`
+      : askInput?.questions?.length
+        ? 'AskUserQuestion'
+        : todoWriteInput
+          ? 'TodoWrite'
+        : toolName
+
+  const inputPreview = askInput?.questions?.length
+    ? truncateInlineText(askInput.questions[0].question, 140)
+    : writeInput
+      ? truncateInlineText(writeInput.filePath, 140)
+      : readInput
+        ? truncateInlineText(readInput.filePath, 140)
+        : taskInput
+          ? truncateInlineText(taskInput.description || taskInput.prompt || taskInput.subagentType, 140)
+      : editInput
+        ? truncateInlineText(editInput.filePath, 140)
+        : todoWriteInput
+          ? todoWriteInput.todos.length
+            ? `${todoWriteInput.todos.length} todos`
+            : '0 todos'
+        : input
+          ? truncateInlineText(input, 140)
+          : ''
+
+  return (
+    <div className="rounded-md border bg-background/40">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className={cn(
+          '!h-auto w-full items-start justify-between gap-3 px-2 py-2 text-xs font-medium text-muted-foreground',
+          'hover:bg-accent/40',
+        )}
+        aria-expanded={open}
+        aria-controls={`tool-item-${message.id}`}
+        onClick={() => onToggle(message.id)}
+      >
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="text-foreground/90">{title}</span>
+            {diffStats ? (
+              <>
+                <Badge variant="outline" className="h-5 px-1.5 text-[10px] text-emerald-400">
+                  +{diffStats.added}
+                </Badge>
+                <Badge variant="outline" className="h-5 px-1.5 text-[10px] text-rose-400">
+                  -{diffStats.removed}
+                </Badge>
+              </>
+            ) : null}
+            {isError ? (
+              <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">
+                error
+              </Badge>
+            ) : null}
+          </span>
+          {inputPreview ? (
+            <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{inputPreview}</span>
+          ) : null}
+        </span>
+        <ChevronDown
+          className={cn('mt-0.5 size-4 shrink-0 transition-transform', open ? 'rotate-0' : '-rotate-90')}
+        />
+      </Button>
+
+      {open ? (
+        <div id={`tool-item-${message.id}`} className="space-y-2 px-2 pb-2 text-xs">
+          {taskInput ? (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-[11px] font-medium text-muted-foreground">Task</div>
+                {taskInput.subagentType ? (
+                  <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                    {taskInput.subagentType}
+                  </Badge>
+                ) : null}
+              </div>
+
+              {taskInput.description ? (
+                <div className="text-sm leading-relaxed">{taskInput.description}</div>
+              ) : null}
+
+              {taskInput.prompt ? (
+                <div className="h-[240px] overflow-hidden rounded-md border bg-background">
+                  <MonacoCode
+                    code={taskInput.prompt}
+                    language="markdown"
+                    className="h-full"
+                  />
+                </div>
+              ) : null}
+            </div>
+          ) : askInput ? (
+            <ClaudeAskUserQuestionTool
+              input={askInput}
+              disabled={
+                askUserQuestionDisabled || Boolean(output) || !message.toolUseId || !onSubmitAskUserQuestion
+              }
+              onSubmit={(answers) => {
+                if (!message.toolUseId || !onSubmitAskUserQuestion) return
+                onSubmitAskUserQuestion(message.toolUseId, answers, message.id)
+              }}
+            />
+          ) : writeInput ? (
+            <div className="space-y-2">
+              <div className="text-[11px] font-medium text-muted-foreground">Write</div>
+              <div className="break-all text-[11px] text-muted-foreground">{writeInput.filePath}</div>
+              <div className="h-[240px] overflow-hidden rounded-md border bg-background">
+                <MonacoCode code={writeInput.content} filePath={writeInput.filePath} className="h-full" />
+              </div>
+            </div>
+          ) : readInput ? (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Tooltip side="top" sideOffset={8}>
+                  <TooltipTrigger asChild>
+                    <div className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground cursor-pointer hover:text-foreground">
+                      {readInput.filePath}
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs break-all">{readInput.filePath}</TooltipContent>
+                </Tooltip>
+              </div>
+              <div className="h-[240px] overflow-hidden rounded-md border bg-background">
+                <MonacoCode
+                  code={readCode ?? ''}
+                  filePath={readInput.filePath}
+                  className="h-full"
+                />
+              </div>
+            </div>
+          ) : editInput ? (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Tooltip side="top" sideOffset={8}>
+                  <TooltipTrigger asChild>
+                    <div className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground cursor-pointer hover:text-foreground">
+                      {editInput.filePath}
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs break-all">{editInput.filePath}</TooltipContent>
+                </Tooltip>
+              </div>
+              <div className="h-[240px] overflow-hidden rounded-md border bg-background">
+                <DiffViewer
+                  diff={editDiff}
+                  viewMode="unified"
+                  hideMeta
+                  hideHunks
+                  className="h-full"
+                />
+              </div>
+            </div>
+          ) : todoWriteInput ? (
+            <ClaudeTodoWriteTool input={todoWriteInput} />
+          ) : (
+            <>
+              {input ? (
+                <details className="rounded-md border bg-background/50">
+                  <summary className="cursor-pointer px-2 py-1 text-[11px] text-muted-foreground">
+                    Input
+                  </summary>
+                  <pre className="px-2 pb-2 text-[11px] whitespace-pre-wrap break-words">{input}</pre>
+                </details>
+              ) : null}
+            </>
+          )}
+
+          {output &&
+          !editInput &&
+          (!todoWriteInput || isError) &&
+          (!readInput || isError) &&
+          (!taskInput || isError) ? (
+            <details className="rounded-md border bg-background/50">
+              <summary className="cursor-pointer px-2 py-1 text-[11px] text-muted-foreground">
+                Output
+              </summary>
+              <pre className="max-h-[240px] overflow-auto px-2 pb-2 text-[11px] whitespace-pre-wrap break-words">
+                {output}
+              </pre>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+})
+
+const ChatToolGroupMessage = memo(function ChatToolGroupMessage({
+  toolMessages,
+  toolType,
+  align,
+  openById,
+  onToggle,
+  isActive,
+  onSubmitAskUserQuestion,
+  askUserQuestionDisabled,
+}: {
+  toolMessages: ChatMessage[]
+  toolType: ToolType
+  align: ChatAlign
+  openById: OpenById
+  onToggle: (id: string) => void
+  isActive: boolean
+  onSubmitAskUserQuestion?: (toolUseId: string, answers: Record<string, string>, messageId: string) => void
+  askUserQuestionDisabled: boolean
+}) {
+  const groupId = useMemo(() => `msg-working-${toolMessages[0]?.id ?? randomId('working')}`, [toolMessages])
+  const defaultOpen = isActive || toolMessages.length <= 3
+  const open = openById[groupId] ?? defaultOpen
+  const label = isActive ? 'Working' : 'Finished working'
 
   return (
     <ChatMessageRow align={align}>
@@ -1030,89 +2157,43 @@ const ChatClaudeToolMessage = memo(function ChatClaudeToolMessage({
           variant="ghost"
           size="sm"
           className={cn(
-            '!h-auto w-full items-start justify-between gap-3 px-3 py-2 text-xs font-medium text-muted-foreground',
+            '!h-auto w-full items-center justify-between gap-3 px-3 py-2 text-xs font-medium text-muted-foreground',
             'hover:bg-accent/40',
             '!rounded-none',
           )}
           aria-expanded={open}
-          aria-controls={`claude-tool-${message.id}`}
-          onClick={() => onToggle(message.id)}
+          aria-controls={`working-${groupId}`}
+          onClick={() => onToggle(groupId)}
         >
-          <span className="min-w-0 flex-1">
-            <span className="flex items-center gap-2">
-              <span>{toolName}</span>
-              <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
-                Claude
-              </Badge>
-              {isError ? (
-                <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">
-                  error
-                </Badge>
-              ) : null}
-            </span>
-            {inputPreview ? (
-              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
-                Input: {inputPreview}
+          <span className="inline-flex items-center gap-2">
+            {isActive ? (
+              <Spinner className="size-3" />
+            ) : (
+              <span className="inline-flex size-4 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-400">
+                <Check className="size-3" />
               </span>
-            ) : null}
-            {outputPreview ? (
-              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
-                Output: {outputPreview}
-              </span>
-            ) : null}
-          </span>
-          <ChevronDown
-            className={cn(
-              'mt-0.5 size-4 shrink-0 transition-transform',
-              open ? 'rotate-0' : '-rotate-90',
             )}
-          />
+            <span>{label}</span>
+          </span>
+          <span className="inline-flex items-center gap-2 text-[11px] text-muted-foreground">
+            {formatToolCallCount(toolMessages.length)}
+            <ChevronDown className={cn('size-4 shrink-0 transition-transform', open ? 'rotate-0' : '-rotate-90')} />
+          </span>
         </Button>
 
         {open ? (
-          <div id={`claude-tool-${message.id}`} className="px-3 pb-3 text-xs space-y-2">
-            {writeInput ? (
-              <div className="space-y-2">
-                <div className="text-[11px] font-medium text-muted-foreground">Write</div>
-                <div className="break-all text-[11px] text-muted-foreground">{writeInput.filePath}</div>
-                <div className="h-[240px] overflow-hidden rounded-md border bg-background">
-                  <MonacoCode code={writeInput.content} filePath={writeInput.filePath} className="h-full" />
-                </div>
-              </div>
-            ) : editInput ? (
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-[11px] font-medium text-muted-foreground">Edit</div>
-                  {editInput.replaceAll ? (
-                    <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
-                      replace_all
-                    </Badge>
-                  ) : null}
-                </div>
-                <div className="break-all text-[11px] text-muted-foreground">{editInput.filePath}</div>
-                <div className="h-[240px] overflow-hidden rounded-md border bg-background">
-                  <DiffViewer
-                    diff={buildReplacementDiff(editInput.filePath, editInput.oldString, editInput.newString)}
-                    viewMode="unified"
-                    className="h-full"
-                  />
-                </div>
-              </div>
-            ) : input ? (
-              <div>
-                <div className="text-[11px] font-medium text-muted-foreground">Input</div>
-                <pre className="mt-1 whitespace-pre-wrap break-words">{input}</pre>
-              </div>
-            ) : null}
-
-            {output ? (
-              <div>
-                <div className="text-[11px] font-medium text-muted-foreground">Output</div>
-                <pre className="mt-1 whitespace-pre-wrap break-words">{output}</pre>
-              </div>
-            ) : (
-              <div className="text-[11px] text-muted-foreground">等待工具输出…</div>
-            )}
+          <div id={`working-${groupId}`} className="space-y-2 px-3 pb-3">
+            {toolMessages.map((tool) => (
+              <ChatToolCallItem
+                key={tool.id}
+                message={tool}
+                toolType={toolType}
+                openById={openById}
+                onToggle={onToggle}
+                onSubmitAskUserQuestion={onSubmitAskUserQuestion}
+                askUserQuestionDisabled={askUserQuestionDisabled}
+              />
+            ))}
           </div>
         ) : null}
       </div>
@@ -1134,13 +2215,15 @@ const ChatTextMessage = memo(function ChatTextMessage({
   const showBubble = Boolean(message.text) || (message.role === 'agent' && isActiveAgentMessage)
   if (!showBubble && !message.images?.length && !tokenUsage) return null
 
+  const markdown = message.role === 'agent' ? message.text : ''
+
   return (
     <ChatMessageRow align={align}>
       <div className="max-w-[80%]">
         {showBubble ? (
           <div
             className={cn(
-              'rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-words',
+              'rounded-lg px-3 py-2 text-sm break-words',
               message.role === 'user'
                 ? 'bg-primary text-primary-foreground'
                 : message.role === 'agent'
@@ -1149,7 +2232,85 @@ const ChatTextMessage = memo(function ChatTextMessage({
             )}
           >
             {message.text ? (
-              message.text
+              message.role === 'agent' ? (
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm, remarkBreaks]}
+                  components={{
+                    p: ({ children }) => (
+                      <p className="whitespace-pre-wrap leading-relaxed">{children}</p>
+                    ),
+                    h1: ({ children }) => (
+                      <h1 className="text-lg font-semibold leading-snug">{children}</h1>
+                    ),
+                    h2: ({ children }) => (
+                      <h2 className="text-base font-semibold leading-snug">{children}</h2>
+                    ),
+                    h3: ({ children }) => (
+                      <h3 className="text-sm font-semibold leading-snug">{children}</h3>
+                    ),
+                    ul: ({ children }) => <ul className="ml-5 list-disc space-y-1">{children}</ul>,
+                    ol: ({ children }) => <ol className="ml-5 list-decimal space-y-1">{children}</ol>,
+                    li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+                    a: ({ href, children }) => (
+                      <a
+                        href={href ?? '#'}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-primary underline underline-offset-2 hover:opacity-90"
+                      >
+                        {children}
+                      </a>
+                    ),
+                    code: ({ className, children, ...props }) => (
+                      <code
+                        {...props}
+                        className={cn(
+                          'rounded bg-background/60 px-1 py-0.5 font-mono text-[0.85em]',
+                          className,
+                        )}
+                      >
+                        {children}
+                      </code>
+                    ),
+                    pre: ({ children }) => {
+                      const first = Array.isArray(children) ? children[0] : children
+                      if (isValidElement(first)) {
+                        const props = first.props as { className?: unknown; children?: unknown }
+                        const className = typeof props.className === 'string' ? props.className : ''
+                        const match = /language-([a-z0-9_-]+)/i.exec(className)
+                        const language = match?.[1]
+
+                        const raw = Array.isArray(props.children)
+                          ? props.children.map((c) => String(c ?? '')).join('')
+                          : String(props.children ?? '')
+                        const text = raw.endsWith('\n') ? raw.slice(0, -1) : raw
+
+                        return (
+                          <div className="my-2 overflow-hidden rounded-md border bg-background">
+                            <ShikiCode code={text} language={language} className="max-h-[360px]" />
+                          </div>
+                        )
+                      }
+
+                      return (
+                        <pre className="my-2 overflow-auto rounded-md border bg-background p-3 text-xs">
+                          {children}
+                        </pre>
+                      )
+                    },
+                    blockquote: ({ children }) => (
+                      <blockquote className="border-l-2 border-border/70 pl-3 text-muted-foreground">
+                        {children}
+                      </blockquote>
+                    ),
+                    hr: () => <div className="my-2 h-px bg-border/70" />,
+                  }}
+                >
+                  {markdown}
+                </ReactMarkdown>
+              ) : (
+                message.text
+              )
             ) : message.role === 'agent' && isActiveAgentMessage ? (
               <span className="inline-flex items-center">
                 <Spinner />
@@ -1181,6 +2342,8 @@ const ChatMessageList = memo(function ChatMessageList({
   setToolOpenById,
   tokenByMessageId,
   toolType,
+  onSubmitAskUserQuestion,
+  askUserQuestionDisabled,
 }: {
   messages: ChatMessage[]
   sending: boolean
@@ -1192,6 +2355,12 @@ const ChatMessageList = memo(function ChatMessageList({
   setToolOpenById: SetOpenById
   tokenByMessageId: Record<string, TokenUsageArtifact>
   toolType: ToolType
+  onSubmitAskUserQuestion?: (
+    toolUseId: string,
+    answers: Record<string, string>,
+    messageId: string,
+  ) => void
+  askUserQuestionDisabled: boolean
 }) {
   const toggleThinkOpen = useCallback(
     (id: string, defaultOpen: boolean) => {
@@ -1215,54 +2384,80 @@ const ChatMessageList = memo(function ChatMessageList({
 
   return (
     <div className="space-y-2">
-      {messages.map((m) => {
-        const align: ChatAlign = m.role === 'user' ? 'justify-end' : 'justify-start'
-        const isActiveAgentMessage =
-          Boolean(sending && activeTaskId) && m.id === `msg-agent-${activeTaskId}`
-        const isActiveThinkMessage =
-          Boolean(sending && activeTaskId && activeReasoningMessageId) &&
-          m.kind === 'think' &&
-          m.id === activeReasoningMessageId
+      {(() => {
+        const rows: ReactNode[] = []
 
-        if (m.kind === 'think') {
-          const open = thinkOpenById[m.id] ?? isActiveThinkMessage
-          return (
-            <ChatThinkMessage
+        for (let i = 0; i < messages.length; i += 1) {
+          const m = messages[i]
+          const align: ChatAlign = m.role === 'user' ? 'justify-end' : 'justify-start'
+          const isActiveAgentMessage =
+            Boolean(sending && activeTaskId) && m.id === `msg-agent-${activeTaskId}`
+          const isActiveThinkMessage =
+            Boolean(sending && activeTaskId && activeReasoningMessageId) &&
+            m.kind === 'think' &&
+            m.id === activeReasoningMessageId
+
+          if (m.kind === 'think') {
+            const open = thinkOpenById[m.id] ?? isActiveThinkMessage
+            rows.push(
+              <ChatThinkMessage
+                key={m.id}
+                message={m}
+                align={align}
+                open={open}
+                isActive={isActiveThinkMessage}
+                onToggle={toggleThinkOpen}
+              />,
+            )
+            continue
+          }
+
+          if (m.kind === 'tool' && m.role === 'agent') {
+            const toolMessages: ChatMessage[] = [m]
+            let j = i + 1
+            while (
+              j < messages.length &&
+              messages[j].kind === 'tool' &&
+              messages[j].role === 'agent'
+            ) {
+              toolMessages.push(messages[j])
+              j += 1
+            }
+
+            const isActiveGroup = Boolean(sending && activeTaskId) && j === messages.length
+
+            rows.push(
+              <ChatToolGroupMessage
+                key={`working-${toolMessages[0].id}`}
+                toolMessages={toolMessages}
+                toolType={toolType}
+                align={align}
+                openById={toolOpenById}
+                onToggle={toggleToolOpen}
+                isActive={isActiveGroup}
+                onSubmitAskUserQuestion={onSubmitAskUserQuestion}
+                askUserQuestionDisabled={askUserQuestionDisabled}
+              />,
+            )
+
+            i = j - 1
+            continue
+          }
+
+          const tokenUsage = m.role === 'agent' ? tokenByMessageId[m.id] : undefined
+          rows.push(
+            <ChatTextMessage
               key={m.id}
               message={m}
               align={align}
-              open={open}
-              isActive={isActiveThinkMessage}
-              onToggle={toggleThinkOpen}
-            />
+              isActiveAgentMessage={isActiveAgentMessage}
+              tokenUsage={tokenUsage}
+            />,
           )
         }
 
-        if (m.kind === 'tool') {
-          const open = toolOpenById[m.id] ?? false
-          const ToolComponent = toolType === 'ClaudeCode' ? ChatClaudeToolMessage : ChatToolMessage
-          return (
-            <ToolComponent
-              key={m.id}
-              message={m}
-              align={align}
-              open={open}
-              onToggle={toggleToolOpen}
-            />
-          )
-        }
-
-        const tokenUsage = m.role === 'agent' ? tokenByMessageId[m.id] : undefined
-        return (
-          <ChatTextMessage
-            key={m.id}
-            message={m}
-            align={align}
-            isActiveAgentMessage={isActiveAgentMessage}
-            tokenUsage={tokenUsage}
-          />
-        )
-      })}
+        return rows
+      })()}
     </div>
   )
 })
@@ -1322,6 +2517,23 @@ function insertAfterMessage(
   return next
 }
 
+function findLastConsecutiveToolIdAfter(messages: ChatMessage[], anchorMessageId: string): string | null {
+  const anchorIndex = messages.findIndex((m) => m.id === anchorMessageId)
+  if (anchorIndex < 0) return null
+
+  let tailId: string | null = null
+  for (let i = anchorIndex + 1; i < messages.length; i += 1) {
+    const message = messages[i]
+    if (message.role === 'agent' && message.kind === 'tool') {
+      tailId = message.id
+      continue
+    }
+    break
+  }
+
+  return tailId
+}
+
 export function ProjectChat({
   project,
   detailsOpen,
@@ -1349,6 +2561,7 @@ export function ProjectChat({
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
   const [draftImages, setDraftImages] = useState<DraftImage[]>([])
+  const [todoDockOpen, setTodoDockOpen] = useState(false)
   const [sending, setSending] = useState(false)
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
   const [activeReasoningMessageId, setActiveReasoningMessageId] = useState<string | null>(
@@ -1383,6 +2596,8 @@ export function ProjectChat({
   } | null>(null)
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const composerOverlayRef = useRef<HTMLDivElement | null>(null)
+  const [composerOverlayHeightPx, setComposerOverlayHeightPx] = useState(0)
   const abortRef = useRef<AbortController | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -1470,6 +2685,39 @@ export function ProjectChat({
     if (!scrollRef.current) return
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages])
+
+  const scrollBottomPaddingPx = useMemo(() => {
+    const fallback = 160
+    const measured = Math.round(composerOverlayHeightPx) + 16
+    return Math.max(fallback, measured)
+  }, [composerOverlayHeightPx])
+
+  useEffect(() => {
+    const overlay = composerOverlayRef.current
+    if (!overlay) return
+
+    const update = () => {
+      const next = Math.max(0, Math.round(overlay.getBoundingClientRect().height))
+      setComposerOverlayHeightPx((prev) => (prev === next ? prev : next))
+    }
+
+    update()
+
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => update())
+    ro.observe(overlay)
+    return () => ro.disconnect()
+  }, [])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+
+    const remaining = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (remaining < 64) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [scrollBottomPaddingPx])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1902,6 +3150,22 @@ export function ProjectChat({
     return { filePath: relativePath, baseName, iconUrl, startLine, endLine, lineLabel }
   }, [codeSelection, workspacePath])
 
+  const todoDockInput = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i]
+      if (message.role !== 'agent' || message.kind !== 'tool') continue
+      const toolName = (message.toolName ?? '').trim()
+      if (!toolName || !isTodoWriteToolName(toolName)) continue
+
+      const input = message.toolInput ?? message.text ?? ''
+      const parsed = tryParseTodoWriteToolInput(input)
+      if (parsed && parsed.todos.length) return parsed
+      return null
+    }
+
+    return null
+  }, [messages])
+
   const mentionSuggestions = useMemo(() => {
     if (!mentionToken) return []
 
@@ -2043,7 +3307,6 @@ export function ProjectChat({
     const taskId = randomId('task')
     const userMessageId = `msg-user-${taskId}`
     const agentMessageId = `msg-agent-${taskId}`
-    const toolOutputMessageId = `msg-tool-output-${taskId}`
     const thinkMessageIdPrefix = `msg-think-${taskId}-`
     let thinkSegmentIndex = 0
     let activeThinkMessageId: string | null = null
@@ -2051,6 +3314,7 @@ export function ProjectChat({
     const toolMessageIdByUseId = new Map<string, string>()
     const toolNameByUseId = new Map<string, string>()
     const seenClaudeToolResultChunks = new Set<string>()
+    const toolOutputMessageId = `msg-tool-output-${taskId}`
     let sawFinal = false
     const isClaude = project.toolType === 'ClaudeCode'
     let activeAgentTextMessageId = agentMessageId
@@ -2263,15 +3527,48 @@ export function ProjectChat({
         const artifact = artifactUpdate?.artifact
         const artifactName = artifact?.name ?? ''
 
-        if (artifactName === 'tool-output') {
+        if (!isClaude && artifactName === 'tool-output') {
           const parts = (artifact?.parts ?? []) as unknown[]
           const chunk = readPartsText(parts)
           if (chunk) {
+            const trimmed = chunk.trim()
+            if (
+              trimmed.startsWith('@[') &&
+              trimmed.endsWith(']') &&
+              trimmed.toLowerCase().includes('image')
+            ) {
+              continue
+            }
+
             setToolOutput((prev) => prev + chunk)
             onToolOutput?.(chunk)
 
+            const anchorToolId = toolChainTailMessageId
+            if (anchorToolId) {
+              setToolOpenById((prev) =>
+                prev[anchorToolId] !== undefined ? prev : { ...prev, [anchorToolId]: true },
+              )
+
+              setMessages((prev) => {
+                const existingIndex = prev.findIndex((m) => m.id === anchorToolId)
+                if (existingIndex < 0) return prev
+
+                const next = [...prev]
+                const existing = next[existingIndex]
+                next[existingIndex] = {
+                  ...existing,
+                  toolOutput: (existing.toolOutput ?? '') + chunk,
+                }
+                return next
+              })
+
+              continue
+            }
+
             setToolOpenById((prev) =>
-              prev[toolOutputMessageId] !== undefined ? prev : { ...prev, [toolOutputMessageId]: true },
+              prev[toolOutputMessageId] !== undefined
+                ? prev
+                : { ...prev, [toolOutputMessageId]: true },
             )
 
             setMessages((prev) => {
@@ -2301,8 +3598,7 @@ export function ProjectChat({
                 text: chunk,
               }
 
-              const anchorAfterId = toolChainTailMessageId ?? activeAgentTextMessageId
-              return insertAfterMessage(prev, anchorAfterId, toolMessage)
+              return insertBeforeMessage(prev, agentMessageId, toolMessage)
             })
           }
           continue
@@ -2401,13 +3697,18 @@ export function ProjectChat({
                 text: input,
               }
 
-              const anchorAfterId = toolChainTailMessageId ?? activeAgentTextMessageId
+              const chainTailId: string | null = toolChainTailMessageId
+              const textAnchorId = activeAgentTextMessageId
+              const pinTaskToChainHead: boolean =
+                Boolean(chainTailId) &&
+                isTaskToolName(resolvedToolName) &&
+                /subagent_type|subagentType/i.test(input)
 
-              if (!toolChainTailMessageId) {
+              if (!chainTailId) {
                 startNewTextSegmentAfterTools = true
               }
 
-              toolChainTailMessageId = toolMessageId
+              toolChainTailMessageId = pinTaskToChainHead ? (chainTailId as string) : toolMessageId
 
               setToolOpenById((prev) =>
                 prev[toolMessageId] !== undefined
@@ -2420,15 +3721,25 @@ export function ProjectChat({
                 if (existingIndex >= 0) {
                   const next = [...prev]
                   const existing = next[existingIndex]
+                  const existingInput = existing.toolInput ?? existing.text ?? ''
+                  const mergedInput = mergeStreamingToolText(existingInput, input)
                   next[existingIndex] = {
                     ...existing,
                     toolName: toolMessage.toolName,
                     toolUseId,
-                    toolInput: input || existing.toolInput,
-                    text: input || existing.text,
+                    toolInput: mergedInput,
+                    text: mergedInput,
                   }
                   return next
                 }
+
+                const tailIndex = chainTailId ? prev.findIndex((m) => m.id === chainTailId) : -1
+                const anchorAfterId =
+                  pinTaskToChainHead
+                    ? textAnchorId
+                    : tailIndex >= 0
+                    ? (chainTailId as string)
+                    : findLastConsecutiveToolIdAfter(prev, textAnchorId) ?? textAnchorId
 
                 return insertAfterMessage(prev, anchorAfterId, toolMessage)
               })
@@ -2441,11 +3752,13 @@ export function ProjectChat({
             if (kind === 'tool_result') {
               const toolMessageId = ensureToolMessageId()
               const resolvedToolName = toolName ?? toolNameByUseId.get(toolUseId) ?? 'tool'
-              const anchorAfterId = toolChainTailMessageId ?? activeAgentTextMessageId
-              if (!toolChainTailMessageId) {
+              const chainTailId: string | null = toolChainTailMessageId
+              const textAnchorId = activeAgentTextMessageId
+              const pinTaskToChainHead: boolean = Boolean(chainTailId) && isTaskToolName(resolvedToolName)
+              if (!chainTailId) {
                 startNewTextSegmentAfterTools = true
               }
-              toolChainTailMessageId = toolMessageId
+              toolChainTailMessageId = pinTaskToChainHead ? (chainTailId as string) : toolMessageId
 
               setToolOpenById((prev) =>
                 prev[toolMessageId] !== undefined
@@ -2482,6 +3795,14 @@ export function ProjectChat({
                   toolIsError: isError,
                   text: '',
                 }
+
+                const tailIndex = chainTailId ? prev.findIndex((m) => m.id === chainTailId) : -1
+                const anchorAfterId =
+                  pinTaskToChainHead
+                    ? textAnchorId
+                    : tailIndex >= 0
+                    ? (chainTailId as string)
+                    : findLastConsecutiveToolIdAfter(prev, textAnchorId) ?? textAnchorId
 
                 return insertAfterMessage(prev, anchorAfterId, toolMessage)
               })
@@ -2556,6 +3877,7 @@ export function ProjectChat({
             )
 
             setMessages((prev) => insertBeforeMessage(prev, agentMessageId, toolMessage))
+            toolChainTailMessageId = toolMessageId
 
             // Split reasoning around tool boundaries so the timeline reads:
             // 思考 -> Tool -> 思考 -> Text
@@ -2595,6 +3917,64 @@ export function ProjectChat({
     sending,
     updateMessageText,
   ])
+
+  const submitAskUserQuestion = useCallback(
+    async (toolUseId: string, answers: Record<string, string>, messageId: string) => {
+      if (!activeTaskId) return
+      if (!toolUseId) return
+
+      const formatted = Object.entries(answers)
+        .map(([question, answer]) => `"${question}"="${answer}"`)
+        .join(', ')
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? {
+                ...m,
+                toolIsError: false,
+                toolOutput: formatted ? `User answers: ${formatted}` : 'User answered.',
+              }
+            : m,
+        ),
+      )
+
+      try {
+        const request = {
+          jsonrpc: '2.0',
+          id: randomId('req'),
+          method: 'tasks/submitAskUserQuestion',
+          params: {
+            id: activeTaskId,
+            toolUseId,
+            answers,
+          },
+        }
+
+        const res = await fetch(`${apiBase}/api/a2a`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json',
+          },
+          body: JSON.stringify(request),
+        })
+
+        const payload = await res.json().catch(() => null)
+        if (!res.ok) {
+          const errText = typeof payload === 'string' ? payload : null
+          throw new Error(errText || `${res.status} ${res.statusText}`)
+        }
+
+        if (payload?.error) {
+          throw new Error(payload?.error?.message ?? '提交失败')
+        }
+      } catch (e) {
+        setChatError((e as Error).message)
+      }
+    },
+    [activeTaskId, apiBase],
+  )
 
   const cancel = useCallback(async () => {
     if (!activeTaskId || !sending || canceling) return
@@ -2639,20 +4019,24 @@ export function ProjectChat({
     <TooltipProvider openDelay={120} closeDelay={60}>
       <>
         <section className="relative min-w-0 flex-1 overflow-hidden flex flex-col">
-          {chatError ? (
-            <div className="border-b bg-destructive/10 px-4 py-2 text-sm text-destructive">
-              {chatError}
-            </div>
-          ) : null}
+        {chatError ? (
+          <div className="border-b bg-destructive/10 px-4 py-2 text-sm text-destructive">
+            {chatError}
+          </div>
+        ) : null}
 
-          <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-4 pt-6 pb-40">
-            {messages.length ? null : (
-              <div className="flex h-full min-h-[160px] items-center justify-center text-center">
-                <div className="max-w-sm text-sm text-muted-foreground">
-                  在这里开始对话：输入问题或指令。
-                </div>
+        <div
+          ref={scrollRef}
+          className="flex-1 min-h-0 overflow-y-auto px-4 pt-6"
+          style={{ paddingBottom: scrollBottomPaddingPx }}
+        >
+          {messages.length ? null : (
+            <div className="flex h-full min-h-[160px] items-center justify-center text-center">
+              <div className="max-w-sm text-sm text-muted-foreground">
+                在这里开始对话：输入问题或指令。
               </div>
-            )}
+            </div>
+          )}
 
             <ChatMessageList
               messages={messages}
@@ -2665,15 +4049,20 @@ export function ProjectChat({
               setToolOpenById={setToolOpenById}
               tokenByMessageId={tokenByMessageId}
               toolType={project.toolType}
+              onSubmitAskUserQuestion={submitAskUserQuestion}
+              askUserQuestionDisabled={!sending || !activeTaskId || canceling}
             />
           </div>
 
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-card via-card/80 to-transparent px-4 pb-4 pt-10">
-            <div className="pointer-events-auto mx-auto max-w-3xl">
-              <div className="relative rounded-lg border bg-background/80 p-1 shadow-lg backdrop-blur">
-                {mentionToken ? (
-                  <div className="absolute inset-x-2 bottom-full mb-2 overflow-hidden rounded-xl border bg-popover shadow-lg">
-                    <div className="border-b px-2 py-1 text-[11px] text-muted-foreground">
+        <div
+          ref={composerOverlayRef}
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-card via-card/80 to-transparent px-4 pb-4 pt-10"
+        >
+          <div className="pointer-events-auto mx-auto max-w-3xl">
+            <div className="relative rounded-lg border bg-background/80 p-1 shadow-lg backdrop-blur">
+              {mentionToken ? (
+                <div className="absolute inset-x-2 bottom-full mb-2 overflow-hidden rounded-xl border bg-popover shadow-lg">
+                  <div className="border-b px-2 py-1 text-[11px] text-muted-foreground">
                       文件搜索：{mentionToken.query ? `@${mentionToken.query}` : '@'}
                       {workspaceFilesTruncated ? '（已截断）' : ''}
                     </div>
@@ -2732,6 +4121,41 @@ export function ProjectChat({
                   </div>
                 ) : null}
                 <div className="space-y-1.5">
+                  {todoDockInput?.todos.length ? (
+                    <div className="px-1">
+                      <button
+                        type="button"
+                        className={cn(
+                          'flex w-full items-center justify-between gap-2 rounded-md border bg-background/60 px-2 py-1 text-left',
+                          'hover:bg-accent/40',
+                        )}
+                        onClick={() => setTodoDockOpen((prev) => !prev)}
+                        aria-expanded={todoDockOpen}
+                      >
+                        <span className="text-[11px] font-medium text-muted-foreground">TodoWrite</span>
+                        <span className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                          <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                            {todoDockInput.todos.length}
+                          </Badge>
+                          <ChevronDown
+                            className={cn(
+                              'size-4 shrink-0 transition-transform',
+                              todoDockOpen ? 'rotate-0' : '-rotate-90',
+                            )}
+                          />
+                        </span>
+                      </button>
+                      {todoDockOpen ? (
+                        <div className="mt-1 rounded-md border bg-background/60 p-1">
+                          <ClaudeTodoWriteTool
+                            input={todoDockInput}
+                            showHeader={false}
+                            showActiveForm={false}
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {activeOpenFileBadge ? (
                     <div className="flex flex-wrap gap-1.5 px-1">
                       <Badge
@@ -2898,7 +4322,7 @@ export function ProjectChat({
                       accept="image/*"
                       multiple
                       className="hidden"
-                      disabled={sending}
+                      disabled={sending || canceling}
                       onChange={(e) => {
                         const files = Array.from(e.target.files ?? [])
                         e.target.value = ''
@@ -2908,10 +4332,12 @@ export function ProjectChat({
 
                     <textarea
                       ref={textareaRef}
-                      className="min-h-[36px] max-h-[120px] w-full resize-none rounded-lg bg-background px-3 py-1.5 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2"
+                      className={cn(
+                        'min-h-[56px] max-h-[120px] w-full resize-none rounded-lg bg-background/50 px-3 py-2 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:ring-offset-2'
+                      )}
                       placeholder="输入消息，Enter 发送，Shift+Enter 换行"
                       value={draft}
-                      disabled={sending}
+                      rows={4}
                       onChange={(e) => {
                         const value = e.target.value
                         setDraft(value)
@@ -2976,7 +4402,7 @@ export function ProjectChat({
                           }
                         }
 
-                        if (e.key === 'Enter' && !e.shiftKey) {
+                        if (e.key === 'Enter' && !e.shiftKey && !sending && !canceling) {
                           e.preventDefault()
                           void send()
                         }
@@ -2988,7 +4414,7 @@ export function ProjectChat({
                         type="button"
                         variant="outline"
                         size="icon-sm"
-                        disabled={sending || draftImages.length >= maxDraftImages}
+                        disabled={sending || canceling || draftImages.length >= maxDraftImages}
                         onClick={() => fileInputRef.current?.click()}
                         title="上传图片"
                       >
@@ -3008,7 +4434,7 @@ export function ProjectChat({
                             type="button"
                             variant="outline"
                             size="sm"
-                            disabled={sending}
+                            disabled={sending || canceling}
                             className="h-8 w-[160px] shrink-0 justify-between gap-2 px-2 text-xs"
                             title="选择模型"
                           >
@@ -3028,6 +4454,7 @@ export function ProjectChat({
                             <Input
                               ref={modelPickerSearchRef}
                               value={modelPickerQuery}
+                              disabled={sending || canceling}
                               onChange={(e) => setModelPickerQuery(e.target.value)}
                               onKeyDown={(e) => {
                                 if (e.key !== 'Enter') return
@@ -3201,8 +4628,19 @@ export function ProjectChat({
                             size="sm"
                             onClick={() => void cancel()}
                             disabled={canceling}
+                            className="gap-1.5"
                           >
-                            {canceling ? '停止中…' : '停止'}
+                            {canceling ? (
+                              <>
+                                <Spinner className="size-3" />
+                                <span>停止中…</span>
+                              </>
+                            ) : (
+                              <>
+                                <Spinner className="size-3" />
+                                <span>停止</span>
+                              </>
+                            )}
                           </Button>
                         ) : (
                           <Button
@@ -3210,6 +4648,8 @@ export function ProjectChat({
                             size="sm"
                             onClick={() => void send()}
                             disabled={
+                              sending ||
+                              canceling ||
                               (!draft.trim() &&
                                 draftImages.filter((img) => img.status === 'ready').length ===
                                 0) ||
@@ -3272,6 +4712,7 @@ export function ProjectChat({
             <Input
               autoFocus
               value={addModelDraft}
+              disabled={sending || canceling}
               onChange={(e) => {
                 setAddModelDraft(e.target.value)
                 if (addModelError) setAddModelError(null)

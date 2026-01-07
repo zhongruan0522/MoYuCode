@@ -1,5 +1,6 @@
 import type {
   ApiResponse,
+  AppVersionDto,
   DriveDto,
   JobDto,
   ListDirectoriesResponse,
@@ -89,6 +90,9 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  app: {
+    version: () => http<AppVersionDto>(`/api/version`),
+  },
   tools: {
     status: (tool: ToolKey) => http<ToolStatusDto>(`/api/tools/${tool}/status`),
     install: (tool: ToolKey) => http<JobDto>(`/api/tools/${tool}/install`, { method: 'POST' }),

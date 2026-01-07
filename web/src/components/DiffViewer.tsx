@@ -161,14 +161,25 @@ function renderCodeCell(side: SideLine | null) {
 export function DiffViewer({
   diff,
   viewMode,
+  hideMeta,
+  hideHunks,
   className,
 }: {
   diff: string
   viewMode: DiffViewMode
+  hideMeta?: boolean
+  hideHunks?: boolean
   className?: string
 }) {
   const parsed = useMemo(() => parseDiff(diff), [diff])
   const splitRows = useMemo(() => toSplitRows(parsed), [parsed])
+  const filteredParsed = useMemo(() => {
+    return parsed.filter((line) => {
+      if (hideMeta && line.kind === 'meta') return false
+      if (hideHunks && line.kind === 'hunk') return false
+      return true
+    })
+  }, [hideHunks, hideMeta, parsed])
 
   if (!diff.trim()) {
     return <div className={cn('px-4 py-4 text-xs text-muted-foreground', className)}>（无 diff）</div>
@@ -178,7 +189,7 @@ export function DiffViewer({
     return (
       <div className={cn('h-full min-h-0 overflow-auto font-mono text-xs', className)}>
         <div className="min-w-fit">
-          {parsed.map((line, idx) => {
+          {filteredParsed.map((line, idx) => {
             if (line.kind !== 'op') {
               return (
                 <div
@@ -218,6 +229,8 @@ export function DiffViewer({
       <div className="min-w-fit">
         {splitRows.map((row, idx) => {
           if (row.kind !== 'row') {
+            if (hideMeta && row.kind === 'meta') return null
+            if (hideHunks && row.kind === 'hunk') return null
             return (
               <div
                 key={`${row.kind}-${idx}`}

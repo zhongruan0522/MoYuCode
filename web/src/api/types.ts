@@ -14,6 +14,12 @@ export type ApiResponse<T> = {
   traceId: string
 }
 
+export type AppVersionDto = {
+  version: string
+  informationalVersion: string | null
+  assemblyVersion: string | null
+}
+
 export type ProviderRequestType =
   | 'AzureOpenAI'
   | 'OpenAI'

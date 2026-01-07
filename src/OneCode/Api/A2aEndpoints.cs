@@ -145,7 +145,85 @@ public static class A2aEndpoints
                 cancellationToken);
         }
 
-        return Results.Json(BuildJsonRpcError(requestId, hasRequestId, code: -32601, message: $"Unsupported method: {method}"),JsonOptions.DefaultOptions);
+        if (methodKey is "tasks/submitaskuserquestion")
+        {
+            return await HandleSubmitAskUserQuestionAsync(
+                requestId,
+                hasRequestId,
+                @params,
+                a2aTaskManager,
+                cancellationToken);
+        }
+
+        return Results.Json(BuildJsonRpcError(requestId, hasRequestId, code: -32601, message: $"Unsupported method: {method}"),JsonOptions.DefaultOptions);     
+    }
+
+    private static Task<IResult> HandleSubmitAskUserQuestionAsync(
+        JsonElement requestId,
+        bool hasRequestId,
+        JsonElement @params,
+        A2aTaskManager a2aTaskManager,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var taskId = ReadString(@params, "id")
+            ?? ReadString(@params, "taskId");
+
+        if (string.IsNullOrWhiteSpace(taskId))
+        {
+            return Task.FromResult(Results.Json(
+                BuildJsonRpcError(requestId, hasRequestId, code: -32602, message: "Missing params.id"),
+                JsonOptions.DefaultOptions));
+        }
+
+        var toolUseId = ReadString(@params, "toolUseId")
+            ?? ReadString(@params, "tool_use_id")
+            ?? ReadString(@params, "toolUseID");
+
+        if (string.IsNullOrWhiteSpace(toolUseId))
+        {
+            return Task.FromResult(Results.Json(
+                BuildJsonRpcError(requestId, hasRequestId, code: -32602, message: "Missing params.toolUseId"),
+                JsonOptions.DefaultOptions));
+        }
+
+        var answers = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (@params.ValueKind == JsonValueKind.Object
+            && @params.TryGetProperty("answers", out var answersProp)
+            && answersProp.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var item in answersProp.EnumerateObject())
+            {
+                if (item.Value.ValueKind == JsonValueKind.String)
+                {
+                    var value = item.Value.GetString();
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        answers[item.Name] = value;
+                    }
+                }
+            }
+        }
+
+        var ok = a2aTaskManager.TrySubmitAskUserQuestion(taskId, toolUseId, answers, out var error);
+        if (!ok)
+        {
+            return Task.FromResult(Results.Json(
+                BuildJsonRpcError(requestId, hasRequestId, code: -32602, message: error ?? "Submit failed."),
+                JsonOptions.DefaultOptions));
+        }
+
+        object? idValue = hasRequestId ? requestId : null;
+        return Task.FromResult(Results.Json(new
+        {
+            jsonrpc = "2.0",
+            id = idValue,
+            result = new
+            {
+                success = true,
+            },
+        }, JsonOptions.DefaultOptions));
     }
 
     private static async Task HandleSendSubscribeAsync(
