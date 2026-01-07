@@ -64,49 +64,58 @@ set "RUN_BAT=%PUBLISH_DIR%\OneCode.bat"
 ) > "%RUN_BAT%"
 
 echo [5/5] Writing Windows service installer...
-set "SERVICE_PS1=%PUBLISH_DIR%\install-service.ps1"
+set "SERVICE_BAT=%PUBLISH_DIR%\install-service.bat"
 (
-  echo param^(
-  echo   [string]$ServiceName = "OneCode",
-  echo   [string]$DisplayName = "OneCode",
-  echo   [string]$Description = "OneCode service",
-  echo   [string]$Urls = "http://0.0.0.0:9110"
+  echo @echo off
+  echo setlocal enableextensions
+  echo set "SERVICE_NAME=%%SERVICE_NAME%%"
+  echo if "%%SERVICE_NAME%%"=="" set "SERVICE_NAME=OneCode"
+  echo set "DISPLAY_NAME=%%DISPLAY_NAME%%"
+  echo if "%%DISPLAY_NAME%%"=="" set "DISPLAY_NAME=OneCode"
+  echo set "DESCRIPTION=%%DESCRIPTION%%"
+  echo if "%%DESCRIPTION%%"=="" set "DESCRIPTION=OneCode service"
+  echo set "URLS=%%URLS%%"
+  echo if "%%URLS%%"=="" set "URLS=http://0.0.0.0:9110"
+  echo.
+  echo net session ^>nul 2^>^&1
+  echo if not "%%errorlevel%%"=="0" ^(
+  echo   echo Run this script as Administrator.
+  echo   exit /b 1
   echo ^)
-  echo $installDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-  echo $exePath = Join-Path $installDir "OneCode.exe"
-  echo if ^(-not ^(Test-Path $exePath^)^) ^{
-  echo   $exePath = Join-Path $installDir "OneCode.dll"
-  echo   if ^(-not ^(Test-Path $exePath^)^) ^{
-  echo     Write-Error "OneCode executable not found in $installDir"
-  echo     exit 1
-  echo   ^}
-  echo   $binaryPath = "dotnet `"$exePath`" --urls `"$Urls`""
-  echo ^} else ^{
-  echo   $binaryPath = "`"$exePath`" --urls `"$Urls`""
-  echo ^}
-  echo $principal = New-Object Security.Principal.WindowsPrincipal^([Security.Principal.WindowsIdentity]::GetCurrent^()^)
-  echo if ^(-not $principal.IsInRole^([Security.Principal.WindowsBuiltInRole]::Administrator^)^) ^{
-  echo   Write-Error "Run this script as Administrator."
-  echo   exit 1
-  echo ^}
-  echo $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-  echo if ^($null -eq $service^) ^{
-  echo   New-Service -Name $ServiceName -DisplayName $DisplayName -BinaryPathName $binaryPath -Description $Description -StartupType Automatic ^| Out-Null
-  echo ^} else ^{
-  echo   sc.exe config $ServiceName binPath= "$binaryPath" start= auto ^| Out-Null
-  echo ^}
-  echo Start-Service -Name $ServiceName
-  echo $service = Get-Service -Name $ServiceName
-  echo Write-Host "Service status: $service.Status"
-  echo Write-Host "URL: $Urls"
-  echo Write-Host "Open: http://localhost:9110"
-) > "%SERVICE_PS1%"
+  echo.
+  echo set "INSTALL_DIR=%%~dp0"
+  echo set "EXE_PATH=%%INSTALL_DIR%%OneCode.exe"
+  echo if exist "%%EXE_PATH%%" ^(
+  echo   set "BIN_PATH=\"%%EXE_PATH%%\" --urls \"%%URLS%%\""
+  echo ^) else ^(
+  echo   set "DLL_PATH=%%INSTALL_DIR%%OneCode.dll"
+  echo   if not exist "%%DLL_PATH%%" ^(
+  echo     echo OneCode executable not found in %%INSTALL_DIR%%
+  echo     exit /b 1
+  echo   ^)
+  echo   set "BIN_PATH=\"dotnet\" \"%%DLL_PATH%%\" --urls \"%%URLS%%\""
+  echo ^)
+  echo.
+  echo sc query "%%SERVICE_NAME%%" ^>nul 2^>^&1
+  echo if "%%errorlevel%%"=="1060" ^(
+  echo   sc create "%%SERVICE_NAME%%" binPath^= "%%BIN_PATH%%" start^= auto DisplayName^= "%%DISPLAY_NAME%%" ^>nul
+  echo ^) else ^(
+  echo   sc config "%%SERVICE_NAME%%" binPath^= "%%BIN_PATH%%" start^= auto ^>nul
+  echo ^)
+  echo.
+  echo sc description "%%SERVICE_NAME%%" "%%DESCRIPTION%%" ^>nul
+  echo sc start "%%SERVICE_NAME%%" ^>nul
+  echo sc query "%%SERVICE_NAME%%"
+  echo echo URL: %%URLS%%
+  echo echo Open: http://localhost:9110
+  echo endlocal
+) > "%SERVICE_BAT%"
 
 echo.
 echo Done.
 echo Output: "%PUBLISH_DIR%"
 echo Start:  "%RUN_BAT%"
-echo Service install: "%SERVICE_PS1%"
+echo Service install: "%SERVICE_BAT%"
 
 popd >nul
 endlocal
