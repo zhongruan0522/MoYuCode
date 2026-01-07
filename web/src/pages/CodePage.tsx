@@ -44,8 +44,7 @@ import {
 import { Spinner } from '@/components/ui/spinner'
 import { ProjectWorkspacePage, type ProjectWorkspaceHandle } from '@/pages/ProjectWorkspacePage'
 import { FileText, Folder, RefreshCw, Terminal, X } from 'lucide-react'
-
-type CodePageMode = 'all' | 'codex' | 'claude'
+import { useRouteTool } from '@/hooks/use-route-tool'
 
 type CodePageConfig = {
   toolTypes: ToolType[]
@@ -60,7 +59,7 @@ type CodePageConfig = {
   openConfigLabel: string
 }
 
-function getCodePageConfig(mode: CodePageMode): CodePageConfig {
+function getCodePageConfig(mode: 'codex' | 'claude'): CodePageConfig {
   if (mode === 'claude') {
     return {
       toolTypes: ['ClaudeCode'],
@@ -76,23 +75,8 @@ function getCodePageConfig(mode: CodePageMode): CodePageConfig {
     }
   }
 
-  if (mode === 'codex') {
-    return {
-      toolTypes: ['Codex'],
-      primaryToolType: 'Codex',
-      primaryToolKey: 'codex',
-      primaryToolLabel: 'Codex',
-      selectedProjectStorageKey: 'onecode:code:selected-project-id:v1',
-      routePath: '/code',
-      installRoute: '/codex',
-      scanCommandLabel: 'codex -V',
-      scanTooltip: '扫描 Codex sessions 并创建项目',
-      openConfigLabel: '打开 config.toml',
-    }
-  }
-
   return {
-    toolTypes: ['Codex', 'ClaudeCode'],
+    toolTypes: ['Codex'],
     primaryToolType: 'Codex',
     primaryToolKey: 'codex',
     primaryToolLabel: 'Codex',
@@ -252,9 +236,10 @@ function mergeProjects(a: ProjectDto[], b: ProjectDto[]): ProjectDto[] {
   return merged
 }
 
-export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
+export function CodePage() {
   const navigate = useNavigate()
-  const config = useMemo(() => getCodePageConfig(mode), [mode])
+  const routeTool = useRouteTool()
+  const config = useMemo(() => getCodePageConfig(routeTool.mode), [routeTool.mode])
   const [searchParams, setSearchParams] = useSearchParams()
 
   const projectIdFromQuery = normalizeProjectQueryId(
@@ -1214,6 +1199,7 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
                 key={selectedProject.id}
                 projectId={selectedProject.id}
                 sessionId={loadedSessionId}
+                currentToolType={routeTool.toolType}
               />
             </div>
           </div>
@@ -1842,6 +1828,7 @@ export function CodePage({ mode = 'all' }: { mode?: CodePageMode } = {}) {
         mode={upsertMode}
         project={upsertMode === 'edit' ? upsertTarget : null}
         defaultToolType={selectedProject?.toolType ?? config.primaryToolType}
+        allowedToolTypes={[routeTool.toolType]}
         onClose={() => {
           setUpsertOpen(false)
           setUpsertTarget(null)

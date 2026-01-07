@@ -26,12 +26,17 @@ function emptyForm(toolType: ToolType): FormState {
 }
 
 const providerDefaultSentinel = '__onecode_provider_default__'
+const toolTypeLabelByType: Record<ToolType, string> = {
+  Codex: 'Codex',
+  ClaudeCode: 'Claude Code',
+}
 
 export function ProjectUpsertModal({
   open,
   mode,
   project,
   defaultToolType,
+  allowedToolTypes,
   onClose,
   onSaved,
 }: {
@@ -39,6 +44,7 @@ export function ProjectUpsertModal({
   mode: 'create' | 'edit'
   project: ProjectDto | null
   defaultToolType: ToolType
+  allowedToolTypes?: ToolType[]
   onClose: () => void
   onSaved: (project: ProjectDto) => void
 }) {
@@ -46,7 +52,26 @@ export function ProjectUpsertModal({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const [form, setForm] = useState<FormState>(() => emptyForm(defaultToolType))
+  const toolTypeOptions = useMemo(() => {
+    const base = allowedToolTypes?.length
+      ? allowedToolTypes
+      : (['Codex', 'ClaudeCode'] as ToolType[])
+    if (project?.toolType && !base.includes(project.toolType)) {
+      return [...base, project.toolType]
+    }
+    return base
+  }, [allowedToolTypes, project?.toolType])
+
+  const resolvedDefaultToolType = useMemo(() => {
+    if (toolTypeOptions.includes(defaultToolType)) return defaultToolType
+    return toolTypeOptions[0] ?? defaultToolType
+  }, [defaultToolType, toolTypeOptions])
+
+  const toolTypeLocked = toolTypeOptions.length <= 1
+
+  const [form, setForm] = useState<FormState>(() =>
+    emptyForm(resolvedDefaultToolType),
+  )
 
   useEffect(() => {
     if (!open) return
@@ -62,9 +87,9 @@ export function ProjectUpsertModal({
           model: project.model ?? '',
         }
       }
-      return emptyForm(defaultToolType)
+      return emptyForm(resolvedDefaultToolType)
     })
-  }, [defaultToolType, mode, open, project])
+  }, [mode, open, project, resolvedDefaultToolType])
 
   const loadProviders = useCallback(async () => {
     try {
@@ -148,14 +173,17 @@ export function ProjectUpsertModal({
               onValueChange={(value) =>
                 setForm((s) => ({ ...s, toolType: value as ToolType }))
               }
-              disabled={loading}
+              disabled={loading || toolTypeLocked}
             >
               <SelectTrigger className="h-9 w-full bg-background px-3 text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="Codex">Codex</SelectItem>
-                <SelectItem value="ClaudeCode">Claude Code</SelectItem>
+                {toolTypeOptions.map((toolType) => (
+                  <SelectItem key={toolType} value={toolType}>
+                    {toolTypeLabelByType[toolType]}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

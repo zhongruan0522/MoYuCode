@@ -17,6 +17,7 @@ import { AboutSection } from '@/pages/settings/AboutSection'
 import { api } from '@/api/client'
 import { ThemeTogglerButton } from '@animate-ui/components-buttons-theme-toggler'
 import { Database, Settings } from 'lucide-react'
+import { LogoBubble } from '@/components/LogoBubble'
 
 function MaskIcon({ src, className }: { src: string; className?: string }) {
   return (
@@ -145,6 +146,7 @@ export default function App() {
     <div className="h-screen overflow-hidden bg-background text-foreground">
       <div className="flex h-full w-full">
         <aside className="flex w-16 shrink-0 flex-col items-center border-r bg-card px-2 py-4">
+          <LogoBubble />
           <nav className="flex flex-col items-center gap-2">
             <NavIconLink
               to="/code"
@@ -194,7 +196,7 @@ export default function App() {
             <Route path="/code" element={<CodePage />} />
             <Route path="/node" element={<NodeInstallPage />} />
             <Route path="/codex" element={<ToolPage tool="codex" title="Codex" />} />
-            <Route path="/claude" element={<CodePage mode="claude" />} />
+            <Route path="/claude" element={<CodePage />} />
             <Route
               path="/claude/tool"
               element={

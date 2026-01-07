@@ -124,8 +124,18 @@ internal sealed class TrayAppContext : ApplicationContext
                 return;
             }
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await app.StopAsync(cts.Token);
+            // 使用 Task.WhenAny 来避免卡死，如果超时就强制结束
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var stopTask = app.StopAsync(cts.Token);
+            var timeoutTask = Task.Delay(TimeSpan.FromSeconds(3));
+
+            var completedTask = await Task.WhenAny(stopTask, timeoutTask);
+
+            if (completedTask == timeoutTask)
+            {
+                // 超时则直接 Dispose 不等待 StopAsync 完成
+            }
+
             await app.DisposeAsync();
             app = null;
             isRunning = false;
@@ -143,14 +153,28 @@ internal sealed class TrayAppContext : ApplicationContext
 
     private async Task ShutdownAsync()
     {
+        // 先停止应用（如果正在运行）
         if (isRunning)
         {
             try
             {
-                await StopAppAsync();
+                // 直接执行停止逻辑，不经过 StopAppAsync 的状态检查
+                // 因为此时我们无论如何都要关闭
+                if (app != null)
+                {
+                    // 快速停止，不等待优雅关闭
+                    var stopTask = app.StopAsync();
+                    var timeoutTask = Task.Delay(TimeSpan.FromSeconds(2));
+                    await Task.WhenAny(stopTask, timeoutTask);
+
+                    await app.DisposeAsync();
+                    app = null;
+                }
+                isRunning = false;
             }
             catch
             {
+                // 忽略错误，确保退出流程继续
             }
         }
 

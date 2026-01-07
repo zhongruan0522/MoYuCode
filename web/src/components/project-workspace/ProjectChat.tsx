@@ -45,7 +45,11 @@ import {
   TooltipTrigger,
 } from '@/components/animate-ui/primitives/animate/tooltip'
 import { Check, ChevronDown, Eye, EyeOff, Image as ImageIcon, X } from 'lucide-react'
-import { useLocation } from 'react-router-dom'
+import { useRouteTool } from '@/hooks/use-route-tool'
+import { useToolInputParsers } from '@/components/project-workspace/tool-inputs/useToolInputParsers'
+import { ToolItemContent } from '@/components/project-workspace/tool-contents/ToolItemContent'
+import { ClaudeAskUserQuestionTool } from '@/components/project-workspace/ClaudeAskUserQuestionTool'
+import { ClaudeTodoWriteTool } from '@/components/project-workspace/ClaudeTodoWriteTool'
 
 type ChatRole = 'user' | 'agent' | 'system'
 
@@ -1605,268 +1609,6 @@ function buildAskUserQuestionAnswerText(
   return first
 }
 
-const ClaudeAskUserQuestionTool = memo(function ClaudeAskUserQuestionTool({
-  input,
-  disabled,
-  onSubmit,
-}: {
-  input: AskUserQuestionToolInput
-  disabled: boolean
-  onSubmit: (answers: Record<string, string>) => void
-}) {
-  const questionKey = useMemo(
-    () => input.questions.map((q) => q.question).join('\n'),
-    [input.questions],
-  )
-
-  const [draftByQuestion, setDraftByQuestion] = useState<Record<string, AskUserQuestionAnswerDraft>>({})
-  const [submitted, setSubmitted] = useState(false)
-
-  useEffect(() => {
-    setSubmitted(false)
-    setDraftByQuestion((prev) => {
-      const next: Record<string, AskUserQuestionAnswerDraft> = {}
-      for (const q of input.questions) {
-        next[q.question] = prev[q.question] ?? { selectedValues: [], otherText: '' }
-      }
-      return next
-    })
-  }, [questionKey, input.questions])
-
-  const setSelectedValues = useCallback(
-    (question: AskUserQuestionToolQuestion, value: string) => {
-      setDraftByQuestion((prev) => {
-        const existing = prev[question.question] ?? { selectedValues: [], otherText: '' }
-        const selected = existing.selectedValues ?? []
-        const nextSelected = question.multiSelect
-          ? selected.includes(value)
-            ? selected.filter((v) => v !== value)
-            : [...selected, value]
-          : [value]
-
-        const shouldClearOther = !nextSelected.includes(askUserQuestionOtherValue)
-        return {
-          ...prev,
-          [question.question]: {
-            selectedValues: nextSelected,
-            otherText: shouldClearOther ? '' : existing.otherText,
-          },
-        }
-      })
-    },
-    [setDraftByQuestion],
-  )
-
-  const setOtherText = useCallback(
-    (questionText: string, nextText: string) => {
-      setDraftByQuestion((prev) => ({
-        ...prev,
-        [questionText]: {
-          ...(prev[questionText] ?? { selectedValues: [], otherText: '' }),
-          otherText: nextText,
-        },
-      }))
-    },
-    [setDraftByQuestion],
-  )
-
-  const allAnswered = useMemo(() => {
-    return input.questions.every((q) => {
-      const answer = buildAskUserQuestionAnswerText(q, draftByQuestion[q.question])
-      return Boolean(answer.trim())
-    })
-  }, [draftByQuestion, input.questions])
-
-  const submit = useCallback(() => {
-    const answers: Record<string, string> = {}
-    for (const q of input.questions) {
-      const answer = buildAskUserQuestionAnswerText(q, draftByQuestion[q.question]).trim()
-      if (answer) {
-        const key = (q.header ?? '').trim() || q.question
-        answers[key] = answer
-      }
-    }
-    setSubmitted(true)
-    onSubmit(answers)
-  }, [draftByQuestion, input.questions, onSubmit])
-
-  return (
-    <div className="space-y-3">
-      <div className="text-[11px] font-medium text-muted-foreground">AskUserQuestion</div>
-      {input.questions.map((q) => {
-        const draft = draftByQuestion[q.question]
-        const selectedValues = draft?.selectedValues ?? []
-        const otherSelected = selectedValues.includes(askUserQuestionOtherValue)
-        const options = q.options.map((o) => ({
-          ...o,
-          resolvedValue: getAskUserQuestionOptionValue(o),
-        }))
-        const effectiveDisabled = disabled || submitted
-
-        return (
-          <div key={q.question} className="space-y-2 rounded-md border bg-background/60 p-3">
-            <div className="flex flex-wrap items-center gap-2">
-              {q.header ? (
-                <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
-                  {q.header}
-                </Badge>
-              ) : null}
-              {q.multiSelect ? (
-                <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
-                  multi_select
-                </Badge>
-              ) : null}
-            </div>
-
-            <div className="text-sm">{q.question}</div>
-
-            <div className="space-y-1.5">
-              {options.map((o) => {
-                const isSelected = selectedValues.includes(o.resolvedValue)
-                return (
-                  <Button
-                    key={o.resolvedValue}
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={effectiveDisabled}
-                    onClick={() => setSelectedValues(q, o.resolvedValue)}
-                    className={cn(
-                      'h-auto w-full items-start justify-start gap-2 px-2 py-2 text-left',
-                      isSelected ? 'bg-accent text-foreground hover:bg-accent' : 'hover:bg-accent/50',
-                    )}
-                  >
-                    <span className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center">
-                      {isSelected ? <Check className="size-4" /> : null}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-sm">{o.label}</span>
-                      {o.description ? (
-                        <span className="mt-0.5 block text-[11px] text-muted-foreground">
-                          {o.description}
-                        </span>
-                      ) : null}
-                    </span>
-                  </Button>
-                )
-              })}
-
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={effectiveDisabled}
-                onClick={() => setSelectedValues(q, askUserQuestionOtherValue)}
-                className={cn(
-                  'h-auto w-full items-start justify-start gap-2 px-2 py-2 text-left',
-                  otherSelected ? 'bg-accent text-foreground hover:bg-accent' : 'hover:bg-accent/50',
-                )}
-              >
-                <span className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center">
-                  {otherSelected ? <Check className="size-4" /> : null}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm">Other</span>
-                  <span className="mt-0.5 block text-[11px] text-muted-foreground">
-                    {q.multiSelect ? 'Type something (optional).' : 'Type something.'}
-                  </span>
-                </span>
-              </Button>
-
-              {otherSelected ? (
-                <Input
-                  value={draft?.otherText ?? ''}
-                  disabled={effectiveDisabled}
-                  placeholder={q.multiSelect ? 'Type something…' : 'Type something…'}
-                  onChange={(e) => setOtherText(q.question, e.target.value)}
-                />
-              ) : null}
-            </div>
-          </div>
-        )
-      })}
-
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <Button type="button" size="sm" disabled={disabled || submitted || !allAnswered} onClick={submit}>
-          Submit
-        </Button>
-      </div>
-    </div>
-  )
-})
-
-const ClaudeTodoWriteTool = memo(function ClaudeTodoWriteTool({
-  input,
-  showHeader = true,
-  showActiveForm = true,
-}: {
-  input: TodoWriteToolInput
-  showHeader?: boolean
-  showActiveForm?: boolean
-}) {
-  const todos = input.todos
-
-  return (
-    <div className="space-y-2">
-      {showHeader ? (
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="text-[11px] font-medium text-muted-foreground">Todo</div>
-          <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
-            {todos.length} item{todos.length === 1 ? '' : 's'}
-          </Badge>
-        </div>
-      ) : null}
-
-      {todos.length ? (
-        <div className="max-h-[240px] overflow-auto rounded-md border bg-background/60">
-          <div className="space-y-1 p-2">
-            {todos.map((todo, idx) => {
-              const statusClass =
-                todo.status === 'completed'
-                  ? 'bg-emerald-500/15 text-emerald-300 ring-emerald-500/30'
-                  : todo.status === 'in_progress'
-                    ? 'bg-sky-500/15 text-sky-300 ring-sky-500/30'
-                    : 'bg-muted/40 text-muted-foreground ring-border/60'
-
-              const statusIcon =
-                todo.status === 'completed' ? (
-                  <Check className="size-4 text-emerald-400" />
-                ) : todo.status === 'in_progress' ? (
-                  <Spinner className="size-3 text-sky-300" />
-                ) : (
-                  <span className="size-2 rounded-full bg-muted-foreground/60" />
-                )
-
-              return (
-                <div
-                  key={`${todo.content}-${idx}`}
-                  className="flex items-start gap-2 rounded-md px-2 py-2 hover:bg-accent/40"
-                >
-                  <span className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center">
-                    {statusIcon}
-                  </span>
-
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm leading-snug">{todo.content}</div>
-                    {showActiveForm && todo.activeForm && todo.activeForm !== todo.content ? (
-                      <div className="mt-0.5 text-[11px] text-muted-foreground">{todo.activeForm}</div>
-                    ) : null}
-                  </div>
-
-                  <Badge variant="outline" className={cn('h-5 px-1.5 text-[10px] ring-1', statusClass)}>
-                    {todo.status}
-                  </Badge>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      ) : (
-        <div className="text-xs text-muted-foreground">（无 todo）</div>
-      )}
-    </div>
-  )
-})
 
 function formatToolCallCount(count: number): string {
   const n = Math.max(0, count)
@@ -1908,87 +1650,82 @@ const ChatToolCallItem = memo(function ChatToolCallItem({
   const input = message.toolInput ?? message.text ?? ''
   const output = message.toolOutput ?? ''
   const isError = Boolean(message.toolIsError)
-  const askInput = useMemo(
-    () => (isAskUserQuestionToolName(toolName) ? tryParseAskUserQuestionToolInput(input) : null),
-    [input, toolName, toolType],
-  )
-  const writeInput = useMemo(
-    () => (isWriteToolName(toolName) ? tryParseWriteToolInput(input) : null),
-    [input, toolName],
-  )
-  const readInput = useMemo(
-    () => (isReadToolName(toolName) ? tryParseReadToolInput(input) : null),
-    [input, toolName],
-  )
-  const editInput = useMemo(
-    () => (isEditToolName(toolName) ? tryParseEditToolInput(input) : null),
-    [input, toolName],
-  )
-  const todoWriteInput = useMemo(
-    () => (isTodoWriteToolName(toolName) ? tryParseTodoWriteToolInput(input) : null),
-    [input, toolName],
-  )
-  const taskInput = useMemo(
-    () => (isTaskToolName(toolName) ? tryParseTaskToolInput(input) : null),
-    [input, toolName],
-  )
+
+  const inputData = useToolInputParsers(toolName, input)
 
   const diffStats = useMemo(() => {
-    if (!editInput) return null
-    if (normalizeNewlines(editInput.oldString) === normalizeNewlines(editInput.newString)) {
+    if (!inputData.editInput) return null
+    if (normalizeNewlines(inputData.editInput.oldString) === normalizeNewlines(inputData.editInput.newString)) {
       return null
     }
-    return computeReplacementDiffStats(editInput.oldString, editInput.newString)
-  }, [editInput])
+    return computeReplacementDiffStats(inputData.editInput.oldString, inputData.editInput.newString)
+  }, [inputData.editInput])
 
   const editDiff = useMemo(() => {
-    if (!editInput) return ''
-    if (normalizeNewlines(editInput.oldString) === normalizeNewlines(editInput.newString)) {
+    if (!inputData.editInput) return ''
+    if (normalizeNewlines(inputData.editInput.oldString) === normalizeNewlines(inputData.editInput.newString)) {
       return ''
     }
-    return buildReplacementDiff(editInput.filePath, editInput.oldString, editInput.newString)
-  }, [editInput])
+    return buildReplacementDiff(inputData.editInput.filePath, inputData.editInput.oldString, inputData.editInput.newString)
+  }, [inputData.editInput])
 
   const readCode = useMemo(() => {
-    if (!readInput) return null
-    if (readInput.content != null) {
-      return normalizeReadToolOutputForMonaco(readInput.content)
+    if (!inputData.readInput) return null
+    if (inputData.readInput.content != null) {
+      return normalizeReadToolOutputForMonaco(inputData.readInput.content)
     }
     const extracted = tryExtractReadToolOutput(output)
     return normalizeReadToolOutputForMonaco(extracted ?? output)
-  }, [output, readInput])
+  }, [output, inputData.readInput])
 
-  const title = editInput
-    ? `Edit ${getBaseName(editInput.filePath)}`
-    : writeInput
-      ? `Write ${getBaseName(writeInput.filePath)}`
-      : readInput
-        ? `Read ${getBaseName(readInput.filePath)}`
-        : taskInput
-          ? `Task${taskInput.subagentType ? ` ${taskInput.subagentType}` : ''}`
-      : askInput?.questions?.length
-        ? 'AskUserQuestion'
-        : todoWriteInput
-          ? 'TodoWrite'
-        : toolName
+  const title = useMemo(() => {
+    if (inputData.editInput) {
+      return `Edit ${getBaseName(inputData.editInput.filePath)}`
+    }
+    if (inputData.writeInput) {
+      return `Write ${getBaseName(inputData.writeInput.filePath)}`
+    }
+    if (inputData.readInput) {
+      return `Read ${getBaseName(inputData.readInput.filePath)}`
+    }
+    if (inputData.taskInput) {
+      return `Task${inputData.taskInput.subagentType ? ` ${inputData.taskInput.subagentType}` : ''}`
+    }
+    if (inputData.askInput?.questions?.length) {
+      return 'AskUserQuestion'
+    }
+    if (inputData.todoWriteInput) {
+      return 'TodoWrite'
+    }
+    return toolName
+  }, [inputData, toolName])
 
-  const inputPreview = askInput?.questions?.length
-    ? truncateInlineText(askInput.questions[0].question, 140)
-    : writeInput
-      ? truncateInlineText(writeInput.filePath, 140)
-      : readInput
-        ? truncateInlineText(readInput.filePath, 140)
-        : taskInput
-          ? truncateInlineText(taskInput.description || taskInput.prompt || taskInput.subagentType, 140)
-      : editInput
-        ? truncateInlineText(editInput.filePath, 140)
-        : todoWriteInput
-          ? todoWriteInput.todos.length
-            ? `${todoWriteInput.todos.length} todos`
-            : '0 todos'
-        : input
-          ? truncateInlineText(input, 140)
-          : ''
+  const inputPreview = useMemo(() => {
+    if (inputData.askInput?.questions?.length) {
+      return truncateInlineText(inputData.askInput.questions[0].question, 140)
+    }
+    if (inputData.writeInput) {
+      return truncateInlineText(inputData.writeInput.filePath, 140)
+    }
+    if (inputData.readInput) {
+      return truncateInlineText(inputData.readInput.filePath, 140)
+    }
+    if (inputData.taskInput) {
+      return truncateInlineText(inputData.taskInput.description || inputData.taskInput.prompt || inputData.taskInput.subagentType, 140)
+    }
+    if (inputData.editInput) {
+      return truncateInlineText(inputData.editInput.filePath, 140)
+    }
+    if (inputData.todoWriteInput) {
+      return inputData.todoWriteInput.todos.length
+        ? `${inputData.todoWriteInput.todos.length} todos`
+        : '0 todos'
+    }
+    if (input) {
+      return truncateInlineText(input, 140)
+    }
+    return ''
+  }, [inputData, input])
 
   return (
     <div className="rounded-md border bg-background/40">
@@ -2034,121 +1771,16 @@ const ChatToolCallItem = memo(function ChatToolCallItem({
 
       {open ? (
         <div id={`tool-item-${message.id}`} className="space-y-2 px-2 pb-2 text-xs">
-          {taskInput ? (
-            <div className="space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-[11px] font-medium text-muted-foreground">Task</div>
-                {taskInput.subagentType ? (
-                  <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
-                    {taskInput.subagentType}
-                  </Badge>
-                ) : null}
-              </div>
-
-              {taskInput.description ? (
-                <div className="text-sm leading-relaxed">{taskInput.description}</div>
-              ) : null}
-
-              {taskInput.prompt ? (
-                <div className="h-[240px] overflow-hidden rounded-md border bg-background">
-                  <MonacoCode
-                    code={taskInput.prompt}
-                    language="markdown"
-                    className="h-full"
-                  />
-                </div>
-              ) : null}
-            </div>
-          ) : askInput ? (
-            <ClaudeAskUserQuestionTool
-              input={askInput}
-              disabled={
-                askUserQuestionDisabled || Boolean(output) || !message.toolUseId || !onSubmitAskUserQuestion
-              }
-              onSubmit={(answers) => {
-                if (!message.toolUseId || !onSubmitAskUserQuestion) return
-                onSubmitAskUserQuestion(message.toolUseId, answers, message.id)
-              }}
-            />
-          ) : writeInput ? (
-            <div className="space-y-2">
-              <div className="text-[11px] font-medium text-muted-foreground">Write</div>
-              <div className="break-all text-[11px] text-muted-foreground">{writeInput.filePath}</div>
-              <div className="h-[240px] overflow-hidden rounded-md border bg-background">
-                <MonacoCode code={writeInput.content} filePath={writeInput.filePath} className="h-full" />
-              </div>
-            </div>
-          ) : readInput ? (
-            <div className="space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <Tooltip side="top" sideOffset={8}>
-                  <TooltipTrigger asChild>
-                    <div className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground cursor-pointer hover:text-foreground">
-                      {readInput.filePath}
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent className="max-w-xs break-all">{readInput.filePath}</TooltipContent>
-                </Tooltip>
-              </div>
-              <div className="h-[240px] overflow-hidden rounded-md border bg-background">
-                <MonacoCode
-                  code={readCode ?? ''}
-                  filePath={readInput.filePath}
-                  className="h-full"
-                />
-              </div>
-            </div>
-          ) : editInput ? (
-            <div className="space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <Tooltip side="top" sideOffset={8}>
-                  <TooltipTrigger asChild>
-                    <div className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground cursor-pointer hover:text-foreground">
-                      {editInput.filePath}
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent className="max-w-xs break-all">{editInput.filePath}</TooltipContent>
-                </Tooltip>
-              </div>
-              <div className="h-[240px] overflow-hidden rounded-md border bg-background">
-                <DiffViewer
-                  diff={editDiff}
-                  viewMode="unified"
-                  hideMeta
-                  hideHunks
-                  className="h-full"
-                />
-              </div>
-            </div>
-          ) : todoWriteInput ? (
-            <ClaudeTodoWriteTool input={todoWriteInput} />
-          ) : (
-            <>
-              {input ? (
-                <details className="rounded-md border bg-background/50">
-                  <summary className="cursor-pointer px-2 py-1 text-[11px] text-muted-foreground">
-                    Input
-                  </summary>
-                  <pre className="px-2 pb-2 text-[11px] whitespace-pre-wrap break-words">{input}</pre>
-                </details>
-              ) : null}
-            </>
-          )}
-
-          {output &&
-          !editInput &&
-          (!todoWriteInput || isError) &&
-          (!readInput || isError) &&
-          (!taskInput || isError) ? (
-            <details className="rounded-md border bg-background/50">
-              <summary className="cursor-pointer px-2 py-1 text-[11px] text-muted-foreground">
-                Output
-              </summary>
-              <pre className="max-h-[240px] overflow-auto px-2 pb-2 text-[11px] whitespace-pre-wrap break-words">
-                {output}
-              </pre>
-            </details>
-          ) : null}
+          <ToolItemContent
+            inputData={inputData}
+            output={output}
+            isError={isError}
+            readCode={readCode}
+            editDiff={editDiff}
+            message={message}
+            askUserQuestionDisabled={askUserQuestionDisabled}
+            onSubmitAskUserQuestion={onSubmitAskUserQuestion}
+          />
         </div>
       ) : null}
     </div>
@@ -2588,8 +2220,7 @@ export function ProjectChat({
   const apiBase = useMemo(() => getApiBase(), [])
   const sessionIdRef = useRef<string>(sessionId ?? createUuid())
   const workspacePath = project.workspacePath.trim()
-
-  const location = useLocation(); // 2. 获取当前 location 对象
+  const routeTool = useRouteTool()
 
   useEffect(() => {
     if (sessionId) {
@@ -3038,6 +2669,17 @@ export function ProjectChat({
     setMentionedFiles([])
   }, [workspacePath])
 
+  const preferClaudeProviders = useMemo(() => {
+    if (routeTool.isClaudeRoute) return true
+    if (routeTool.isCodexRoute) return false
+    return (currentToolType ?? project.toolType) === 'ClaudeCode'
+  }, [
+    currentToolType,
+    project.toolType,
+    routeTool.isClaudeRoute,
+    routeTool.isCodexRoute,
+  ])
+
   useEffect(() => {
     setProviders([])
     setProvidersLoaded(false)
@@ -3047,8 +2689,7 @@ export function ProjectChat({
       try {
         const allProviders = await api.providers.list()
         if (canceled) return
-        const isClaudeRoute = location.pathname.includes('/codex') || location.pathname.includes('/claude');
-        if (isClaudeRoute) {
+        if (preferClaudeProviders) {
           setProviders(allProviders.filter((p) => p.requestType === 'Anthropic'))
         } else {
           setProviders(allProviders.filter((p) => p.requestType !== 'Anthropic'))
@@ -3063,7 +2704,7 @@ export function ProjectChat({
     return () => {
       canceled = true
     }
-  }, [project.toolType, currentToolType])
+  }, [preferClaudeProviders])
 
   useEffect(() => {
     setCustomModels([])
