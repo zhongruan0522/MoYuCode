@@ -25,10 +25,10 @@ internal sealed class TrayAppContext : ApplicationContext
     {
         var menu = new ContextMenuStrip();
         statusItem = new ToolStripMenuItem("Status: Stopped") { Enabled = false };
-        startItem = new ToolStripMenuItem("Start OneCode", null, async (_, __) => await StartAppAsync());
-        stopItem = new ToolStripMenuItem("Stop OneCode", null, async (_, __) => await StopAppAsync());
-        openItem = new ToolStripMenuItem("Open OneCode", null, (_, __) => OpenUrl());
-        exitItem = new ToolStripMenuItem("Exit", null, (_, __) => _ = ShutdownAsync());
+        startItem = new ToolStripMenuItem("启动OneCode", null, async (_, __) => await StartAppAsync());
+        stopItem = new ToolStripMenuItem("关闭OneCode", null, async (_, __) => await StopAppAsync());
+        openItem = new ToolStripMenuItem("打开OneCode", null, (_, __) => OpenUrl());
+        exitItem = new ToolStripMenuItem("退出", null, (_, __) => _ = ShutdownAsync());
 
         menu.Items.Add(statusItem);
         menu.Items.Add(new ToolStripSeparator());
@@ -40,10 +40,11 @@ internal sealed class TrayAppContext : ApplicationContext
         menu.Items.Add(exitItem);
         menu.Opening += (_, __) => RefreshMenu();
 
+        var iconStream = typeof(TrayAppContext).Assembly.GetManifestResourceStream("OneCode.Win.favicon.ico");
         trayIcon = new NotifyIcon
         {
             Text = "OneCode",
-            Icon = SystemIcons.Application,
+            Icon = iconStream != null ? new Icon(iconStream) : SystemIcons.Application,
             ContextMenuStrip = menu,
             Visible = true
         };

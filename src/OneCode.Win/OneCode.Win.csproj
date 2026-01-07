@@ -7,6 +7,7 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <UseWindowsForms>true</UseWindowsForms>
         <EnableWindowsTargeting>true</EnableWindowsTargeting>
+        <ApplicationIcon>favicon.ico</ApplicationIcon>
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(Configuration)' == 'Release'">
@@ -15,6 +16,10 @@
         <DebugType>none</DebugType>
         <DebugSymbols>false</DebugSymbols>
     </PropertyGroup>
+
+    <ItemGroup>
+      <EmbeddedResource Include="favicon.ico" />
+    </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="..\OneCode\OneCode.csproj" />

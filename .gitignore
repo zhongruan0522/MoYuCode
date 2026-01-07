@@ -11,3 +11,4 @@ src/OneCode/wwwroot/
 /artifacts
 /src/OneCode/wwwroot
 node_modules
+/.vs/OneCode.slnx
