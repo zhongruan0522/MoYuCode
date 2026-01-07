@@ -5,6 +5,16 @@ on:
     branches: ["**"]
     tags: ["v*"]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g., 1.2.3)"
+        required: true
+        type: string
+      release_notes:
+        description: "Release notes / changelog"
+        required: true
+        type: string
 
 jobs:
   build:
@@ -24,12 +34,15 @@ jobs:
 
           BASE_VERSION="1.0"
 
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
             VERSION="${BASE_VERSION}.${GITHUB_RUN_NUMBER}"
           fi
 
+          VERSION="${VERSION#v}"
           echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
           echo "Version: ${VERSION}"
 
@@ -62,4 +75,15 @@ jobs:
 
       - name: Build backend
         run: dotnet build src/OneCode/OneCode.csproj -c Release -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }}
+
+      - name: Create release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v${{ steps.version.outputs.version }}"
+          gh release create "${TAG}" --title "${TAG}" --notes "${RELEASE_NOTES}" --target "${GITHUB_SHA}"
 
