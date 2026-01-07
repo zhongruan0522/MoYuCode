@@ -85,9 +85,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for RID in linux-x64 win-x64 osx-x64; do
+          for RID in linux-x64 osx-x64; do
             dotnet publish src/OneCode/OneCode.csproj -c Release -r "${RID}" --self-contained false -o "artifacts/publish/${RID}" -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }}
           done
+          WIN_PUBLISH_ROOT="artifacts/publish/win-x64"
+          WIN_TMP_DIR="${WIN_PUBLISH_ROOT}/win-ball"
+          rm -rf "${WIN_PUBLISH_ROOT}"
+          mkdir -p "${WIN_TMP_DIR}"
+          dotnet publish src/OneCode.Win/OneCode.Win.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false -o "${WIN_TMP_DIR}"
+          if [[ ! -f "${WIN_TMP_DIR}/OneCode.Win.exe" ]]; then
+            echo "OneCode.Win.exe not found in win-x64 publish output."
+            exit 1
+          fi
+          cp "${WIN_TMP_DIR}/OneCode.Win.exe" "${WIN_PUBLISH_ROOT}/OneCode.Win.exe"
+          rm -rf "${WIN_TMP_DIR}"
 
       - name: Add platform scripts
         if: github.event_name == 'workflow_dispatch'
@@ -273,68 +284,6 @@ jobs:
           echo "Open: http://localhost:9110"
           EOF
           chmod +x "artifacts/publish/osx-x64/install-service.sh"
-
-          cat > "artifacts/publish/win-x64/OneCode.bat" <<'EOF'
-          @echo off
-          setlocal
-          cd /d "%~dp0"
-          set "DOTNET_ENVIRONMENT=Production"
-          set "ASPNETCORE_URLS=http://0.0.0.0:9110"
-          echo OneCode is running at %ASPNETCORE_URLS%
-          echo Open: http://localhost:9110
-          if exist "OneCode.exe" (
-            "OneCode.exe"
-          ) else (
-            dotnet "OneCode.dll"
-          )
-          endlocal
-          EOF
-
-          cat > "artifacts/publish/win-x64/install-service.bat" <<'EOF'
-          @echo off
-          setlocal enableextensions
-          set "SERVICE_NAME=%SERVICE_NAME%"
-          if "%SERVICE_NAME%"=="" set "SERVICE_NAME=OneCode"
-          set "DISPLAY_NAME=%DISPLAY_NAME%"
-          if "%DISPLAY_NAME%"=="" set "DISPLAY_NAME=OneCode"
-          set "DESCRIPTION=%DESCRIPTION%"
-          if "%DESCRIPTION%"=="" set "DESCRIPTION=OneCode service"
-          set "URLS=%URLS%"
-          if "%URLS%"=="" set "URLS=http://0.0.0.0:9110"
-
-          net session >nul 2>&1
-          if not "%errorlevel%"=="0" (
-            echo Run this script as Administrator.
-            exit /b 1
-          )
-
-          set "INSTALL_DIR=%~dp0"
-          set "EXE_PATH=%INSTALL_DIR%OneCode.exe"
-          if exist "%EXE_PATH%" (
-            set "BIN_PATH=\"%EXE_PATH%\" --urls \"%URLS%\""
-          ) else (
-            set "DLL_PATH=%INSTALL_DIR%OneCode.dll"
-            if not exist "%DLL_PATH%" (
-              echo OneCode executable not found in %INSTALL_DIR%
-              exit /b 1
-            )
-            set "BIN_PATH=\"dotnet\" \"%DLL_PATH%\" --urls \"%URLS%\""
-          )
-
-          sc query "%SERVICE_NAME%" >nul 2>&1
-          if "%errorlevel%"=="1060" (
-            sc create "%SERVICE_NAME%" binPath= "%BIN_PATH%" start= auto DisplayName= "%DISPLAY_NAME%" >nul
-          ) else (
-            sc config "%SERVICE_NAME%" binPath= "%BIN_PATH%" start= auto >nul
-          )
-
-          sc description "%SERVICE_NAME%" "%DESCRIPTION%" >nul
-          sc start "%SERVICE_NAME%" >nul
-          sc query "%SERVICE_NAME%"
-          echo URL: %URLS%
-          echo Open: http://localhost:9110
-          endlocal
-          EOF
 
       - name: Package release assets
         if: github.event_name == 'workflow_dispatch'
