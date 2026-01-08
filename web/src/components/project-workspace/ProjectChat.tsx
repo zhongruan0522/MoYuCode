@@ -465,11 +465,6 @@ function isTodoWriteToolName(toolName: string): boolean {
   return key === 'todowrite' || key.endsWith('todowrite') || key.includes('mcpclaudetodowrite')
 }
 
-function isTaskToolName(toolName: string): boolean {
-  const key = normalizeToolNameKey(toolName)
-  return key === 'task' || key.endsWith('task')
-}
-
 function shouldAutoOpenClaudeTool(toolName: string): boolean {
   return (
     isWriteToolName(toolName) ||
