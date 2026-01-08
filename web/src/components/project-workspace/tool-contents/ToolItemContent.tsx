@@ -23,6 +23,7 @@ interface ToolItemContentProps {
   }
   askUserQuestionDisabled: boolean
   onSubmitAskUserQuestion?: (toolUseId: string, answers: Record<string, string>, messageId: string) => void
+  onComposeAskUserQuestion?: (answers: Record<string, string>) => void
 }
 
 export const ToolItemContent = memo(function ToolItemContent({
@@ -34,8 +35,16 @@ export const ToolItemContent = memo(function ToolItemContent({
   message,
   askUserQuestionDisabled,
   onSubmitAskUserQuestion,
+  onComposeAskUserQuestion,
 }: ToolItemContentProps) {
   const { taskInput, askInput, writeInput, readInput, editInput, todoWriteInput, bashInput, globInput } = inputData
+
+  const askAlreadyAnswered = Boolean(
+    askInput?.answers &&
+      Object.values(askInput.answers).some((value) => typeof value === 'string' && value.trim()),
+  )
+  const hasAskHandler = Boolean(onSubmitAskUserQuestion || onComposeAskUserQuestion)
+  const askDisabled = askUserQuestionDisabled || askAlreadyAnswered || !hasAskHandler
 
   const shouldShowOutput = Boolean(
     output &&
@@ -54,13 +63,12 @@ export const ToolItemContent = memo(function ToolItemContent({
       ) : askInput ? (
         <ClaudeAskUserQuestionTool
           input={askInput}
-          disabled={
-            askUserQuestionDisabled || Boolean(output) || !message.toolUseId || !onSubmitAskUserQuestion
-          }
+          disabled={askDisabled}
           onSubmit={(answers) => {
             if (!message.toolUseId || !onSubmitAskUserQuestion) return
             onSubmitAskUserQuestion(message.toolUseId, answers, message.id)
           }}
+          onComposeToInput={onComposeAskUserQuestion}
         />
       ) : writeInput ? (
         <WriteToolContent input={writeInput} />

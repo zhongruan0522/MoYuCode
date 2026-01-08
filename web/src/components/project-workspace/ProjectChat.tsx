@@ -609,24 +609,32 @@ function normalizeReadToolOutputForMonaco(output: string): string {
 
 function extractInlineThink(text: string): { thinkText: string; visibleText: string } | null {
   const raw = text ?? ''
-  const start = raw.indexOf('<think>')
-  if (start < 0) return null
+  const tags = ['think', 'analysis', 'thinking']
 
-  const end = raw.indexOf('</think>', start + '<think>'.length)
-  if (end < 0 || end <= start) return null
+  for (const tag of tags) {
+    const open = `<${tag}>`
+    const close = `</${tag}>`
+    const start = raw.indexOf(open)
+    if (start < 0) continue
 
-  const before = raw.slice(0, start)
-  const thinkText = raw.slice(start + '<think>'.length, end).trim()
-  const after = raw.slice(end + '</think>'.length)
+    const end = raw.indexOf(close, start + open.length)
+    if (end < 0 || end <= start) continue
 
-  if (!thinkText.trim()) return null
+    const before = raw.slice(0, start)
+    const thinkText = raw.slice(start + open.length, end).trim()
+    const after = raw.slice(end + close.length)
 
-  const beforeTrimmedEnd = before.replace(/\s+$/, '')
-  const afterTrimmedStart = after.replace(/^\s+/, '')
-  const spacer = beforeTrimmedEnd && afterTrimmedStart ? '\n\n' : ''
-  const visibleText = `${beforeTrimmedEnd}${spacer}${afterTrimmedStart}`
+    if (!thinkText.trim()) return null
 
-  return { thinkText, visibleText }
+    const beforeTrimmedEnd = before.replace(/\s+$/, '')
+    const afterTrimmedStart = after.replace(/^\s+/, '')
+    const spacer = beforeTrimmedEnd && afterTrimmedStart ? '\n\n' : ''
+    const visibleText = `${beforeTrimmedEnd}${spacer}${afterTrimmedStart}`
+
+    return { thinkText, visibleText }
+  }
+
+  return null
 }
 
 function getInlineThinkId(agentMessageId: string): string {
@@ -1135,6 +1143,102 @@ function readCodexAgentText(value: unknown, depth = 0): string | null {
   return null
 }
 
+function normalizeCodexRoleHint(value: string | null | undefined): ChatRole | null {
+  const key = (value ?? '').trim().toLowerCase()
+  if (!key) return null
+  if (key.includes('assistant') || key.includes('agent')) return 'agent'
+  if (key.includes('user')) return 'user'
+  if (key.includes('system')) return 'system'
+  return null
+}
+
+function inferCodexRole(value: unknown, depth = 0): ChatRole | null {
+  if (!value || typeof value !== 'object' || depth > 3) return null
+  const obj = value as Record<string, unknown>
+
+  const roleHint = normalizeCodexRoleHint(
+    readFirstNonEmptyString(obj, ['role', 'sender', 'author']),
+  )
+  if (roleHint) return roleHint
+
+  const typeHint = normalizeCodexRoleHint(
+    readFirstNonEmptyString(obj, ['type', 'kind', 'item_type', 'itemType']),
+  )
+  if (typeHint) return typeHint
+
+  const nestedCandidates = [obj.item, obj.msg, obj.message, obj.data]
+  for (const candidate of nestedCandidates) {
+    const nestedHint = inferCodexRole(candidate, depth + 1)
+    if (nestedHint) return nestedHint
+  }
+
+  return null
+}
+
+function readCodexReasoningDelta(value: unknown, depth = 0): string | null {
+  if (value == null || depth > 4) return null
+
+  if (typeof value === 'string') return null
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = readCodexReasoningDelta(item, depth + 1)
+      if (found) return found
+    }
+    return null
+  }
+
+  if (typeof value !== 'object') return null
+  const obj = value as Record<string, unknown>
+
+  const typeHint = readFirstNonEmptyString(obj, ['type', 'kind', 'event', 'eventType'])
+  const typeKey = (typeHint ?? '').toLowerCase()
+  const isReasoningType = typeKey.includes('reasoning') || typeKey.includes('thinking')
+
+  if (isReasoningType) {
+    const delta = readFirstNonEmptyString(obj, ['delta', 'text', 'thinking'])
+    if (delta) return delta
+  }
+
+  if (!typeHint) {
+    const delta = readFirstNonEmptyString(obj, ['delta', 'text', 'thinking'])
+    if (delta) return delta
+  }
+
+  const nestedCandidates = [obj.msg, obj.item, obj.message, obj.data]
+  for (const candidate of nestedCandidates) {
+    const nested = readCodexReasoningDelta(candidate, depth + 1)
+    if (nested) return nested
+  }
+
+  return null
+}
+
+function tryExtractCodexReasoningDelta(raw: string, method?: string): string | null {
+  const combined = `${method ?? ''}\n${raw}`.toLowerCase()
+  const mightContainReasoning = combined.includes('reasoning') || combined.includes('thinking')
+  if (!mightContainReasoning) return null
+
+  const parsed = tryParseJsonRecord(raw)
+  if (!parsed) return null
+
+  const paramsValue = parsed.params
+  const candidates: unknown[] = []
+  if (paramsValue && typeof paramsValue === 'object') {
+    const params = paramsValue as Record<string, unknown>
+    candidates.push(params.msg, params.item, params.delta, params)
+  } else {
+    candidates.push(paramsValue)
+  }
+
+  for (const candidate of candidates) {
+    const delta = readCodexReasoningDelta(candidate, 0)
+    if (delta) return delta
+  }
+
+  return null
+}
+
 function tryExtractCodexAgentMessage(raw: string, method?: string): CodexAgentMessageInfo | null {
   const combined = `${method ?? ''}\n${raw}`.toLowerCase()
   const mightContainMessage =
@@ -1171,6 +1275,9 @@ function tryExtractCodexAgentMessage(raw: string, method?: string): CodexAgentMe
     const obj = candidate as Record<string, unknown>
     const text = readCodexAgentText(obj, 0)
     if (!text) continue
+
+    const roleHint = inferCodexRole(obj, 0)
+    if (roleHint && roleHint !== 'agent') continue
 
     const messageId =
       readFirstNonEmptyString(obj, ['messageId', 'message_id', 'id']) ??
@@ -1490,12 +1597,14 @@ const ChatToolCallItem = memo(function ChatToolCallItem({
   onToggle,
   onSubmitAskUserQuestion,
   askUserQuestionDisabled,
+  onComposeAskUserQuestion,
 }: {
   message: ChatMessage
   openById: OpenById
   onToggle: (id: string) => void
   onSubmitAskUserQuestion?: (toolUseId: string, answers: Record<string, string>, messageId: string) => void
   askUserQuestionDisabled: boolean
+  onComposeAskUserQuestion?: (answers: Record<string, string>) => void
 }) {
   const open = openById[message.id] ?? false
   const toolName = message.toolName ?? 'tool'
@@ -1661,6 +1770,7 @@ const ChatToolCallItem = memo(function ChatToolCallItem({
             message={message}
             askUserQuestionDisabled={askUserQuestionDisabled}
             onSubmitAskUserQuestion={onSubmitAskUserQuestion}
+            onComposeAskUserQuestion={onComposeAskUserQuestion}
           />
         </div>
       ) : null}
@@ -1676,6 +1786,7 @@ const ChatToolGroupMessage = memo(function ChatToolGroupMessage({
   isActive,
   onSubmitAskUserQuestion,
   askUserQuestionDisabled,
+  onComposeAskUserQuestion,
 }: {
   toolMessages: ChatMessage[]
   align: ChatAlign
@@ -1684,6 +1795,7 @@ const ChatToolGroupMessage = memo(function ChatToolGroupMessage({
   isActive: boolean
   onSubmitAskUserQuestion?: (toolUseId: string, answers: Record<string, string>, messageId: string) => void
   askUserQuestionDisabled: boolean
+  onComposeAskUserQuestion?: (answers: Record<string, string>) => void
 }) {
   const groupId = useMemo(() => `msg-working-${toolMessages[0]?.id ?? randomId('working')}`, [toolMessages])
   const defaultOpen = isActive || toolMessages.length <= 3
@@ -1732,6 +1844,7 @@ const ChatToolGroupMessage = memo(function ChatToolGroupMessage({
                 onToggle={onToggle}
                 onSubmitAskUserQuestion={onSubmitAskUserQuestion}
                 askUserQuestionDisabled={askUserQuestionDisabled}
+                onComposeAskUserQuestion={onComposeAskUserQuestion}
               />
             ))}
           </div>
@@ -1883,6 +1996,7 @@ const ChatMessageList = memo(function ChatMessageList({
   tokenByMessageId,
   onSubmitAskUserQuestion,
   askUserQuestionDisabled,
+  onComposeAskUserQuestion,
 }: {
   messages: ChatMessage[]
   sending: boolean
@@ -1899,6 +2013,7 @@ const ChatMessageList = memo(function ChatMessageList({
     messageId: string,
   ) => void
   askUserQuestionDisabled: boolean
+  onComposeAskUserQuestion?: (answers: Record<string, string>) => void
 }) {
   const toggleThinkOpen = useCallback(
     (id: string, defaultOpen: boolean) => {
@@ -1974,6 +2089,7 @@ const ChatMessageList = memo(function ChatMessageList({
                 isActive={isActiveGroup}
                 onSubmitAskUserQuestion={onSubmitAskUserQuestion}
                 askUserQuestionDisabled={askUserQuestionDisabled}
+                onComposeAskUserQuestion={onComposeAskUserQuestion}
               />,
             )
 
@@ -1998,31 +2114,6 @@ const ChatMessageList = memo(function ChatMessageList({
     </div>
   )
 })
-
-function upsertThinkChunk(
-  prev: ChatMessage[],
-  thinkMessageId: string,
-  agentMessageId: string,
-  chunk: string,
-): ChatMessage[] {
-  const existingIndex = prev.findIndex((m) => m.id === thinkMessageId)
-  if (existingIndex >= 0) {
-    const next = [...prev]
-    const existing = next[existingIndex]
-    next[existingIndex] = { ...existing, text: existing.text + chunk }
-    return next
-  }
-
-  const insertIndex = prev.findIndex((m) => m.id === agentMessageId)
-  const next = [...prev]
-  const message: ChatMessage = { id: thinkMessageId, role: 'agent', kind: 'think', text: chunk }
-  if (insertIndex >= 0) {
-    next.splice(insertIndex, 0, message)
-  } else {
-    next.push(message)
-  }
-  return next
-}
 
 function upsertThinkMessage(
   prev: ChatMessage[],
@@ -2114,23 +2205,6 @@ function insertAfterMessage(
     next.push(message)
   }
   return next
-}
-
-function findLastConsecutiveToolIdAfter(messages: ChatMessage[], anchorMessageId: string): string | null {
-  const anchorIndex = messages.findIndex((m) => m.id === anchorMessageId)
-  if (anchorIndex < 0) return null
-
-  let tailId: string | null = null
-  for (let i = anchorIndex + 1; i < messages.length; i += 1) {
-    const message = messages[i]
-    if (message.role === 'agent' && message.kind === 'tool') {
-      tailId = message.id
-      continue
-    }
-    break
-  }
-
-  return tailId
 }
 
 export function ProjectChat({
@@ -3138,13 +3212,126 @@ export function ProjectChat({
     const toolNameByUseId = new Map<string, string>()
     const seenClaudeToolResultChunks = new Set<string>()
     const toolOutputMessageId = `msg-tool-output-${taskId}`
-    let sawFinal = false
     const isClaude = project.toolType === 'ClaudeCode'
     let activeAgentTextMessageId = agentMessageId
     let agentTextSegmentIndex = 1
     let sawAnyAgentText = false
     let toolChainTailMessageId: string | null = null
     let startNewTextSegmentAfterTools = false
+    type StreamKind = 'text' | 'think' | 'tool'
+    let lastStreamKind: StreamKind | null = null
+    let streamTailMessageId: string | null = agentMessageId
+    let canReuseInitialTextMessage = true
+
+    const markStreamTail = (kind: StreamKind, messageId: string) => {
+      lastStreamKind = kind
+      streamTailMessageId = messageId
+      if (messageId !== agentMessageId) {
+        canReuseInitialTextMessage = false
+      }
+    }
+
+    const appendAgentTextChunk = (updater: (prev: string) => string) => {
+      const canAppendToExisting =
+        lastStreamKind === 'text' &&
+        Boolean(activeAgentTextMessageId) &&
+        streamTailMessageId === activeAgentTextMessageId &&
+        !startNewTextSegmentAfterTools
+
+      if (canAppendToExisting) {
+        updateMessageText(activeAgentTextMessageId, (prev) => updater(prev))
+        sawAnyAgentText = true
+        markStreamTail('text', activeAgentTextMessageId)
+        if (toolChainTailMessageId) {
+          toolChainTailMessageId = null
+        }
+        return
+      }
+
+      let nextTextId: string
+      if (
+        !sawAnyAgentText &&
+        canReuseInitialTextMessage &&
+        streamTailMessageId === agentMessageId
+      ) {
+        nextTextId = agentMessageId
+      } else {
+        agentTextSegmentIndex += 1
+        nextTextId = `${agentMessageId}-seg-${agentTextSegmentIndex}`
+      }
+
+      activeAgentTextMessageId = nextTextId
+      sawAnyAgentText = true
+      startNewTextSegmentAfterTools = false
+      if (toolChainTailMessageId) {
+        toolChainTailMessageId = null
+      }
+
+      const nextText = updater('')
+      if (nextTextId === agentMessageId) {
+        updateMessageText(nextTextId, () => nextText)
+        markStreamTail('text', nextTextId)
+        return
+      }
+
+      const textMessage: ChatMessage = {
+        id: nextTextId,
+        role: 'agent',
+        kind: 'text',
+        text: nextText,
+      }
+      setMessages((prev) => insertAfterMessage(prev, streamTailMessageId, textMessage))
+      markStreamTail('text', nextTextId)
+    }
+
+    const appendThinkChunk = (chunk: string) => {
+      const canAppendToExisting =
+        lastStreamKind === 'think' &&
+        Boolean(activeThinkMessageId) &&
+        streamTailMessageId === activeThinkMessageId
+
+      if (canAppendToExisting) {
+        const targetThinkId = activeThinkMessageId as string
+        setMessages((prev) => {
+          const existingIndex = prev.findIndex((m) => m.id === targetThinkId)
+          if (existingIndex >= 0) {
+            const next = [...prev]
+            const existing = next[existingIndex]
+            next[existingIndex] = { ...existing, text: existing.text + chunk }
+            return next
+          }
+          const message: ChatMessage = {
+            id: targetThinkId,
+            role: 'agent',
+            kind: 'think',
+            text: chunk,
+          }
+          return insertAfterMessage(prev, streamTailMessageId, message)
+        })
+        setActiveReasoningMessageId(targetThinkId)
+        setThinkOpenById((prev) =>
+          prev[targetThinkId] !== undefined ? prev : { ...prev, [targetThinkId]: true },
+        )
+        markStreamTail('think', targetThinkId)
+        return
+      }
+
+      thinkSegmentIndex += 1
+      const nextThinkId = `${thinkMessageIdPrefix}${thinkSegmentIndex}`
+      activeThinkMessageId = nextThinkId
+      const message: ChatMessage = {
+        id: nextThinkId,
+        role: 'agent',
+        kind: 'think',
+        text: chunk,
+      }
+      setMessages((prev) => insertAfterMessage(prev, streamTailMessageId, message))
+      setActiveReasoningMessageId(nextThinkId)
+      setThinkOpenById((prev) =>
+        prev[nextThinkId] !== undefined ? prev : { ...prev, [nextThinkId]: true },
+      )
+      markStreamTail('think', nextThinkId)
+    }
 
     setMessages((prev) => [
       ...prev,
@@ -3258,133 +3445,27 @@ export function ProjectChat({
           if (messageId === agentMessageId && chunk) {
             setActiveReasoningMessageId(null)
             if (isClaude) {
-              if (statusUpdate.final) {
-                if (!sawAnyAgentText) {
-                  if (startNewTextSegmentAfterTools && toolChainTailMessageId) {
-                    agentTextSegmentIndex += 1
-                    const nextTextId = `${agentMessageId}-seg-${agentTextSegmentIndex}`
-                    const insertAfterId = toolChainTailMessageId
-
-                    activeAgentTextMessageId = nextTextId
-                    sawAnyAgentText = true
-                    startNewTextSegmentAfterTools = false
-                    toolChainTailMessageId = null
-
-                    const toolMessage: ChatMessage = {
-                      id: nextTextId,
-                      role: 'agent',
-                      kind: 'text',
-                      text: chunk,
-                    }
-
-                    setMessages((prev) => {
-                      const existingIndex = prev.findIndex((m) => m.id === nextTextId)
-                      if (existingIndex >= 0) {
-                        const next = [...prev]
-                        const existing = next[existingIndex]
-                        next[existingIndex] = { ...existing, text: existing.text + chunk }
-                        return next
-                      }
-
-                      return insertAfterMessage(prev, insertAfterId, toolMessage)
-                    })
-                  } else {
-                    updateMessageText(activeAgentTextMessageId, () => chunk)
-                    sawAnyAgentText = true
-                  }
-                }
-              } else if (startNewTextSegmentAfterTools && toolChainTailMessageId) {
-                agentTextSegmentIndex += 1
-                const nextTextId = `${agentMessageId}-seg-${agentTextSegmentIndex}`
-                const insertAfterId = toolChainTailMessageId
-
-                activeAgentTextMessageId = nextTextId
-                sawAnyAgentText = true
-                startNewTextSegmentAfterTools = false
-                toolChainTailMessageId = null
-
-                const toolMessage: ChatMessage = {
-                  id: nextTextId,
-                  role: 'agent',
-                  kind: 'text',
-                  text: chunk,
-                }
-
-                setMessages((prev) => {
-                  const existingIndex = prev.findIndex((m) => m.id === nextTextId)
-                  if (existingIndex >= 0) {
-                    const next = [...prev]
-                    const existing = next[existingIndex]
-                    next[existingIndex] = { ...existing, text: existing.text + chunk }
-                    return next
-                  }
-
-                  return insertAfterMessage(prev, insertAfterId, toolMessage)
-                })
-              } else {
-                updateMessageText(activeAgentTextMessageId, (prev) => prev + chunk)
-                sawAnyAgentText = true
-                if (toolChainTailMessageId) {
-                  toolChainTailMessageId = null
-                }
+              if (!(statusUpdate.final && sawAnyAgentText)) {
+                const updater = statusUpdate.final
+                  ? () => chunk
+                  : (prev: string) => prev + chunk
+                appendAgentTextChunk(updater)
               }
             } else {
-              if (startNewTextSegmentAfterTools && toolChainTailMessageId) {
-                agentTextSegmentIndex += 1
-                const nextTextId = `${agentMessageId}-seg-${agentTextSegmentIndex}`
-                const insertAfterId = toolChainTailMessageId
-
-                activeAgentTextMessageId = nextTextId
-                sawAnyAgentText = true
-                startNewTextSegmentAfterTools = false
-                toolChainTailMessageId = null
-
-                const toolMessage: ChatMessage = {
-                  id: nextTextId,
-                  role: 'agent',
-                  kind: 'text',
-                  text: chunk,
-                }
-
-                setMessages((prev) => {
-                  const existingIndex = prev.findIndex((m) => m.id === nextTextId)
-                  if (existingIndex >= 0) {
-                    const next = [...prev]
-                    const existing = next[existingIndex]
-                    next[existingIndex] = { ...existing, text: existing.text + chunk }
-                    return next
-                  }
-
-                  return insertAfterMessage(prev, insertAfterId, toolMessage)
-                })
-              } else {
-                if (statusUpdate.final) {
-                  updateMessageText(activeAgentTextMessageId, () => chunk)
-                } else {
-                  updateMessageText(activeAgentTextMessageId, (prev) => prev + chunk)
-                }
-                sawAnyAgentText = true
-                if (toolChainTailMessageId) {
-                  toolChainTailMessageId = null
-                }
-              }
+              const updater = statusUpdate.final
+                ? () => chunk
+                : (prev: string) => prev + chunk
+              appendAgentTextChunk(updater)
             }
           }
-        }
-
-        if (statusUpdate?.final) {
-          sawFinal = true
-          setSending(false)
-          setActiveReasoningMessageId(null)
-          setActiveTaskId(null)
-          setCanceling(false)
         }
 
         const artifactUpdate = (resultObj.artifactUpdate ?? null) as A2aArtifactUpdate | null
         const artifact = artifactUpdate?.artifact
         const artifactName = artifact?.name ?? ''
+        const artifactKey = artifactName.toLowerCase()
 
-        if (!isClaude && artifactName === 'tool-output') {
+        if (!isClaude && artifactKey === 'tool-output') {
           const parts = (artifact?.parts ?? []) as unknown[]
           const chunk = readPartsText(parts)
           if (chunk) {
@@ -3419,6 +3500,7 @@ export function ProjectChat({
                 return next
               })
 
+              lastStreamKind = 'tool'
               continue
             }
 
@@ -3428,30 +3510,26 @@ export function ProjectChat({
                 : { ...prev, [toolOutputMessageId]: true },
             )
 
+            lastStreamKind = 'tool'
           }
           continue
         }
 
-        if (artifactName === 'reasoning') {
+        if (
+          artifactKey === 'reasoning' ||
+          artifactKey === 'agent_reasoning' ||
+          artifactKey === 'agentreasoning' ||
+          artifactKey === 'thinking'
+        ) {
           const parts = (artifact?.parts ?? []) as unknown[]
           const chunk = readPartsText(parts)
           if (chunk) {
-            if (!activeThinkMessageId) {
-              thinkSegmentIndex += 1
-              activeThinkMessageId = `${thinkMessageIdPrefix}${thinkSegmentIndex}`
-            }
-
-            const targetThinkId = activeThinkMessageId
-            setActiveReasoningMessageId(targetThinkId)
-            setMessages((prev) => upsertThinkChunk(prev, targetThinkId, agentMessageId, chunk))
-            setThinkOpenById((prev) =>
-              prev[targetThinkId] !== undefined ? prev : { ...prev, [targetThinkId]: true },
-            )
+            appendThinkChunk(chunk)
           }
           continue
         }
 
-        if (artifactName === 'token-usage') {
+        if (artifactKey === 'token-usage') {
           const parts = (artifact?.parts ?? []) as unknown[]
           for (const part of parts) {
             if (!part || typeof part !== 'object') continue
@@ -3468,7 +3546,7 @@ export function ProjectChat({
           continue
         }
 
-        if (artifactName === 'claude-tools') {
+        if (artifactKey === 'claude-tools') {
           const parts = (artifact?.parts ?? []) as unknown[]
           for (const part of parts) {
             if (!part || typeof part !== 'object') continue
@@ -3525,18 +3603,10 @@ export function ProjectChat({
                 text: input,
               }
 
-              const chainTailId: string | null = toolChainTailMessageId
-              const textAnchorId = activeAgentTextMessageId
-              const pinTaskToChainHead: boolean =
-                Boolean(chainTailId) &&
-                isTaskToolName(resolvedToolName) &&
-                /subagent_type|subagentType/i.test(input)
-
-              if (!chainTailId) {
+              const hadToolChain = Boolean(toolChainTailMessageId)
+              if (!hadToolChain) {
                 startNewTextSegmentAfterTools = true
               }
-
-              toolChainTailMessageId = pinTaskToChainHead ? (chainTailId as string) : toolMessageId
 
               setToolOpenById((prev) =>
                 prev[toolMessageId] !== undefined
@@ -3544,6 +3614,8 @@ export function ProjectChat({
                   : { ...prev, [toolMessageId]: shouldAutoOpenClaudeTool(resolvedToolName) },
               )
 
+              const anchorAfterId = streamTailMessageId
+              let inserted = false
               setMessages((prev) => {
                 const existingIndex = prev.findIndex((m) => m.id === toolMessageId)
                 if (existingIndex >= 0) {
@@ -3560,17 +3632,16 @@ export function ProjectChat({
                   }
                   return next
                 }
-
-                const tailIndex = chainTailId ? prev.findIndex((m) => m.id === chainTailId) : -1
-                const anchorAfterId =
-                  pinTaskToChainHead
-                    ? textAnchorId
-                    : tailIndex >= 0
-                    ? (chainTailId as string)
-                    : findLastConsecutiveToolIdAfter(prev, textAnchorId) ?? textAnchorId
-
+                inserted = true
                 return insertAfterMessage(prev, anchorAfterId, toolMessage)
               })
+
+              if (inserted) {
+                toolChainTailMessageId = toolMessageId
+                markStreamTail('tool', toolMessageId)
+              } else {
+                lastStreamKind = 'tool'
+              }
 
               activeThinkMessageId = null
               setActiveReasoningMessageId(null)
@@ -3580,13 +3651,10 @@ export function ProjectChat({
             if (kind === 'tool_result') {
               const toolMessageId = ensureToolMessageId()
               const resolvedToolName = toolName ?? toolNameByUseId.get(toolUseId) ?? 'tool'
-              const chainTailId: string | null = toolChainTailMessageId
-              const textAnchorId = activeAgentTextMessageId
-              const pinTaskToChainHead: boolean = Boolean(chainTailId) && isTaskToolName(resolvedToolName)
-              if (!chainTailId) {
+              const hadToolChain = Boolean(toolChainTailMessageId)
+              if (!hadToolChain) {
                 startNewTextSegmentAfterTools = true
               }
-              toolChainTailMessageId = pinTaskToChainHead ? (chainTailId as string) : toolMessageId
 
               setToolOpenById((prev) =>
                 prev[toolMessageId] !== undefined
@@ -3594,6 +3662,8 @@ export function ProjectChat({
                   : { ...prev, [toolMessageId]: shouldAutoOpenClaudeTool(resolvedToolName) },
               )
 
+              const anchorAfterId = streamTailMessageId
+              let inserted = false
               setMessages((prev) => {
                 const existingIndex = prev.findIndex((m) => m.id === toolMessageId)
                 if (existingIndex >= 0) {
@@ -3624,16 +3694,16 @@ export function ProjectChat({
                   text: '',
                 }
 
-                const tailIndex = chainTailId ? prev.findIndex((m) => m.id === chainTailId) : -1
-                const anchorAfterId =
-                  pinTaskToChainHead
-                    ? textAnchorId
-                    : tailIndex >= 0
-                    ? (chainTailId as string)
-                    : findLastConsecutiveToolIdAfter(prev, textAnchorId) ?? textAnchorId
-
+                inserted = true
                 return insertAfterMessage(prev, anchorAfterId, toolMessage)
               })
+
+              if (inserted) {
+                toolChainTailMessageId = toolMessageId
+                markStreamTail('tool', toolMessageId)
+              } else {
+                lastStreamKind = 'tool'
+              }
 
               if (output) {
                 const dedupeKey = `${toolUseId}\n${output.slice(0, 512)}`
@@ -3658,7 +3728,7 @@ export function ProjectChat({
           continue
         }
 
-        if (artifactName === 'codex-events') {
+        if (artifactKey === 'codex-events') {
           const parts = (artifact?.parts ?? []) as unknown[]
           for (const part of parts) {
             if (!part || typeof part !== 'object') continue
@@ -3677,6 +3747,12 @@ export function ProjectChat({
             if (!raw) continue
             setRawEvents((prev) => [...prev, { receivedAtUtc, method, raw }])
             if (isClaude) continue
+
+            const reasoningDelta = tryExtractCodexReasoningDelta(raw, method)
+            if (reasoningDelta) {
+              // Codex reasoning deltas are already streamed via reasoning artifacts.
+              continue
+            }
 
             const toolCall = tryExtractCodexToolCall(raw, method)
             if (toolCall) {
@@ -3707,21 +3783,15 @@ export function ProjectChat({
                   : { ...prev, [toolMessageId]: shouldOpenTool },
               )
 
-              const chainTailId: string | null = toolChainTailMessageId
-              const textAnchorId = activeAgentTextMessageId
-              if (!chainTailId) {
+              const hadToolChain = Boolean(toolChainTailMessageId)
+              if (!hadToolChain) {
                 startNewTextSegmentAfterTools = true
               }
-              toolChainTailMessageId = toolMessageId
 
-              setMessages((prev) => {
-                const tailIndex = chainTailId ? prev.findIndex((m) => m.id === chainTailId) : -1
-                const anchorAfterId =
-                  tailIndex >= 0
-                    ? (chainTailId as string)
-                    : findLastConsecutiveToolIdAfter(prev, textAnchorId) ?? textAnchorId
-                return insertAfterMessage(prev, anchorAfterId, toolMessage)
-              })
+              const anchorAfterId = streamTailMessageId
+              setMessages((prev) => insertAfterMessage(prev, anchorAfterId, toolMessage))
+              toolChainTailMessageId = toolMessageId
+              markStreamTail('tool', toolMessageId)
 
               // Split reasoning around tool boundaries so the timeline reads:
               // 思考 -> Tool -> 思考 -> Text
@@ -3742,51 +3812,15 @@ export function ProjectChat({
             if (seenCodexAgentMessages.has(agentDedupeKey)) continue
             seenCodexAgentMessages.add(agentDedupeKey)
 
-            if (startNewTextSegmentAfterTools && toolChainTailMessageId) {
-              agentTextSegmentIndex += 1
-              const nextTextId = `${agentMessageId}-seg-${agentTextSegmentIndex}`
-              const insertAfterId = toolChainTailMessageId
-
-              activeAgentTextMessageId = nextTextId
-              sawAnyAgentText = true
-              startNewTextSegmentAfterTools = false
-              toolChainTailMessageId = null
-
-              const toolMessage: ChatMessage = {
-                id: nextTextId,
-                role: 'agent',
-                kind: 'text',
-                text: trimmed,
-              }
-
-              setMessages((prev) => {
-                const existingIndex = prev.findIndex((m) => m.id === nextTextId)
-                if (existingIndex >= 0) {
-                  const next = [...prev]
-                  const existing = next[existingIndex]
-                  next[existingIndex] = { ...existing, text: mergeStreamingText(existing.text, trimmed) }
-                  return next
-                }
-
-                return insertAfterMessage(prev, insertAfterId, toolMessage)
-              })
-            } else {
-              updateMessageText(activeAgentTextMessageId, (prev) => mergeStreamingText(prev, trimmed))
-              sawAnyAgentText = true
-              if (toolChainTailMessageId) {
-                toolChainTailMessageId = null
-              }
-            }
+            appendAgentTextChunk((prev) => mergeStreamingText(prev, trimmed))
           }
         }
-
-        if (!sawFinal) {
-          setSending(false)
-          setActiveReasoningMessageId(null)
-          setActiveTaskId(null)
-          setCanceling(false)
-        }
       }
+
+      setSending(false)
+      setActiveReasoningMessageId(null)
+      setActiveTaskId(null)
+      setCanceling(false)
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
         setChatError((e as Error).message)
@@ -3812,14 +3846,18 @@ export function ProjectChat({
     updateMessageText,
   ])
 
+  const formatAskUserQuestionAnswers = useCallback((answers: Record<string, string>) => {
+    return Object.entries(answers)
+      .map(([question, answer]) => `"${question}"="${answer}"`)
+      .join(', ')
+  }, [])
+
   const submitAskUserQuestion = useCallback(
     async (toolUseId: string, answers: Record<string, string>, messageId: string) => {
       if (!activeTaskId) return
       if (!toolUseId) return
 
-      const formatted = Object.entries(answers)
-        .map(([question, answer]) => `"${question}"="${answer}"`)
-        .join(', ')
+      const formatted = formatAskUserQuestionAnswers(answers)
 
       setMessages((prev) =>
         prev.map((m) =>
@@ -3867,7 +3905,35 @@ export function ProjectChat({
         setChatError((e as Error).message)
       }
     },
-    [activeTaskId, apiBase],
+    [activeTaskId, apiBase, formatAskUserQuestionAnswers],
+  )
+
+  const composeAskUserQuestionAnswers = useCallback(
+    (answers: Record<string, string>) => {
+      const formatted = formatAskUserQuestionAnswers(answers)
+      if (!formatted) return
+
+      setDraft((prev) => {
+        const base = prev ?? ''
+        const trimmed = base.trimEnd()
+        const prefix = trimmed ? `${trimmed}\n\n` : ''
+        return `${prefix}User answers: ${formatted}`
+      })
+      setChatError(null)
+      setMentionToken(null)
+      setMentionActiveIndex(0)
+
+      if (typeof window !== 'undefined') {
+        window.setTimeout(() => {
+          const el = textareaRef.current
+          if (!el) return
+          el.focus()
+          const nextLength = el.value.length
+          el.setSelectionRange(nextLength, nextLength)
+        }, 0)
+      }
+    },
+    [formatAskUserQuestionAnswers],
   )
 
   const cancel = useCallback(async () => {
@@ -3967,6 +4033,7 @@ export function ProjectChat({
               tokenByMessageId={tokenByMessageId}
               onSubmitAskUserQuestion={submitAskUserQuestion}
               askUserQuestionDisabled={sending || !activeTaskId || canceling}
+              onComposeAskUserQuestion={composeAskUserQuestionAnswers}
             />
           </div>
 

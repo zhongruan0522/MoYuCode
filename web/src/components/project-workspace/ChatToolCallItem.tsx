@@ -31,6 +31,7 @@ interface ChatToolCallItemProps {
   onToggle: (id: string) => void
   onSubmitAskUserQuestion?: (toolUseId: string, answers: Record<string, string>, messageId: string) => void
   askUserQuestionDisabled: boolean
+  onComposeAskUserQuestion?: (answers: Record<string, string>) => void
 }
 
 export const ChatToolCallItem = memo(function ChatToolCallItem({
@@ -39,6 +40,7 @@ export const ChatToolCallItem = memo(function ChatToolCallItem({
   onToggle,
   onSubmitAskUserQuestion,
   askUserQuestionDisabled,
+  onComposeAskUserQuestion,
 }: ChatToolCallItemProps) {
   const open = openById[message.id] ?? false
   const toolName = message.toolName ?? 'tool'
@@ -187,6 +189,7 @@ export const ChatToolCallItem = memo(function ChatToolCallItem({
             message={message}
             askUserQuestionDisabled={askUserQuestionDisabled}
             onSubmitAskUserQuestion={onSubmitAskUserQuestion}
+            onComposeAskUserQuestion={onComposeAskUserQuestion}
           />
         </div>
       ) : null}

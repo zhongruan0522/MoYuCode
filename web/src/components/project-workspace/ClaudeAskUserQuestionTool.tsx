@@ -52,33 +52,103 @@ export interface ClaudeAskUserQuestionToolProps {
   input: AskUserQuestionToolInput
   disabled: boolean
   onSubmit: (answers: Record<string, string>) => void
+  onComposeToInput?: (answers: Record<string, string>) => void
 }
 
 export const ClaudeAskUserQuestionTool = memo(function ClaudeAskUserQuestionTool({
   input,
   disabled,
   onSubmit,
+  onComposeToInput,
 }: ClaudeAskUserQuestionToolProps) {
   const questionKey = useMemo(
     () => input.questions.map((q) => q.question).join('\n'),
     [input.questions],
   )
 
-  const [draftByQuestion, setDraftByQuestion] = useState<Record<string, AskUserQuestionAnswerDraft>>({})
+  const answersByQuestion = useMemo(() => input.answers ?? {}, [input.answers])
+  const hasInitialAnswers = useMemo(() => {
+    return input.questions.some((q) => {
+      const answer =
+        answersByQuestion[(q.header ?? '').trim()] ??
+        answersByQuestion[q.question] ??
+        answersByQuestion[q.header ?? q.question]
+      return Boolean((answer ?? '').trim())
+    })
+  }, [answersByQuestion, input.questions])
+  const [draftByQuestion, setDraftByQuestion] = useState<Record<string, AskUserQuestionAnswerDraft>>(
+    {},
+  )
   const [submitted, setSubmitted] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
 
   useEffect(() => {
-    setSubmitted(false)
+    setSubmitted(hasInitialAnswers)
     setConfirmOpen(false)
     setDraftByQuestion((prev) => {
       const next: Record<string, AskUserQuestionAnswerDraft> = {}
       for (const q of input.questions) {
+        const answer =
+          answersByQuestion[(q.header ?? '').trim()] ??
+          answersByQuestion[q.question] ??
+          answersByQuestion[q.header ?? q.question]
+
+        const normalizedAnswer = (answer ?? '').trim()
+        if (normalizedAnswer) {
+          const options = q.options.map((o) => ({
+            label: o.label.trim(),
+            resolvedValue: getAskUserQuestionOptionValue(o),
+          }))
+
+          const parts = q.multiSelect
+            ? normalizedAnswer.split(',').map((p) => p.trim()).filter(Boolean)
+            : [normalizedAnswer]
+
+          const selectedValues: string[] = []
+          const unmatched: string[] = []
+
+          for (const part of parts) {
+            if (!part) continue
+            const lower = part.toLowerCase()
+            const matched = options.find(
+              (opt) =>
+                opt.resolvedValue.toLowerCase() === lower || opt.label.toLowerCase() === lower,
+            )
+
+            if (matched) {
+              if (!selectedValues.includes(matched.resolvedValue)) {
+                selectedValues.push(matched.resolvedValue)
+              }
+            } else {
+              unmatched.push(part)
+            }
+          }
+
+          if (!q.multiSelect && selectedValues.length > 1) {
+            selectedValues.splice(1)
+          }
+
+          const shouldUseOther =
+            unmatched.length > 0 || (!selectedValues.length && normalizedAnswer.length > 0)
+
+          next[q.question] = {
+            selectedValues: shouldUseOther
+              ? [...selectedValues, askUserQuestionOtherValue]
+              : selectedValues,
+            otherText: shouldUseOther
+              ? unmatched.length
+                ? unmatched.join(', ')
+                : normalizedAnswer
+              : '',
+          }
+          continue
+        }
+
         next[q.question] = prev[q.question] ?? { selectedValues: [], otherText: '' }
       }
       return next
     })
-  }, [questionKey, input.questions])
+  }, [answersByQuestion, hasInitialAnswers, input.questions, questionKey])
 
   const setSelectedValues = useCallback(
     (question: AskUserQuestionToolQuestion, value: string) => {
@@ -135,8 +205,9 @@ export const ClaudeAskUserQuestionTool = memo(function ClaudeAskUserQuestionTool
     }
     setSubmitted(true)
     onSubmit(answers)
+    onComposeToInput?.(answers)
     setConfirmOpen(false)
-  }, [draftByQuestion, input.questions, onSubmit])
+  }, [draftByQuestion, input.questions, onComposeToInput, onSubmit])
 
   const requestSubmit = useCallback(() => {
     if (disabled || submitted || !allAnswered) return
