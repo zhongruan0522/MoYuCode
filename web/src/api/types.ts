@@ -95,6 +95,7 @@ export type ProjectDto = {
   providerId: string | null
   providerName: string | null
   model: string | null
+  isPinned: boolean
   lastStartedAtUtc: string | null
   createdAtUtc: string
   updatedAtUtc: string
@@ -106,6 +107,10 @@ export type ProjectUpsertRequest = {
   workspacePath: string
   providerId: string | null
   model: string | null
+}
+
+export type ProjectPinUpdateRequest = {
+  isPinned: boolean
 }
 
 export type ProjectEnvironmentDto = {

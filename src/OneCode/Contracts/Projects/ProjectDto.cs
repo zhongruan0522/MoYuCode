@@ -10,6 +10,7 @@ public sealed record ProjectDto(
     Guid? ProviderId,
     string? ProviderName,
     string? Model,
+    bool IsPinned,
     DateTimeOffset? LastStartedAtUtc,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc);

@@ -11,7 +11,7 @@ import type {
 import { cn } from '@/lib/utils'
 import { DirectoryPicker } from '@/components/DirectoryPicker'
 import { Modal } from '@/components/Modal'
-import { MoreHorizontal } from 'lucide-react'
+import { MoreHorizontal, Pin } from 'lucide-react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -500,6 +500,19 @@ export function ProjectsTab({ toolType }: { toolType: ToolType }) {
     }
   }
 
+  const updatePinned = useCallback(
+    async (project: ProjectDto, isPinned: boolean) => {
+      setError(null)
+      try {
+        await api.projects.updatePin(project.id, { isPinned })
+        await load()
+      } catch (e) {
+        setError((e as Error).message)
+      }
+    },
+    [load],
+  )
+
   const modelDatalistId = useMemo(() => {
     return `models-${toolType}`
   }, [toolType])
@@ -659,9 +672,14 @@ export function ProjectsTab({ toolType }: { toolType: ToolType }) {
                           }}
                         />
                         <div className="min-w-0">
-                          <div className="truncate font-medium" title={p.name}>
+                        <div className="flex items-center gap-1">
+                          {p.isPinned ? (
+                            <Pin className="size-3 shrink-0 text-muted-foreground" />
+                          ) : null}
+                          <span className="truncate font-medium" title={p.name}>
                             {p.name}
-                          </div>
+                          </span>
+                        </div>
                           {p.lastStartedAtUtc ? (
                             <div className="text-xs text-muted-foreground">
                               上次启动：{formatUtc(p.lastStartedAtUtc)}
@@ -801,6 +819,17 @@ export function ProjectsTab({ toolType }: { toolType: ToolType }) {
                 }}
               >
                 启动
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full items-center rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+                onClick={() => {
+                  setOpenActionsId(null)
+                  void updatePinned(actionsProject, !actionsProject.isPinned)
+                }}
+              >
+                {actionsProject.isPinned ? '取消置顶' : '置顶项目'}
               </button>
               <button
                 type="button"

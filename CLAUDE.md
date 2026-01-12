@@ -15,12 +15,25 @@ OneCode is a dual-stack application providing a web UI for AI coding assistants 
 - Run (HTTPS): `dotnet run --project src/OneCode/OneCode.csproj --launch-profile https`
   - Runs on `https://localhost:9111`
 
+### Windows Desktop App (OneCode.Win)
+- Build: `dotnet build src/OneCode.Win/OneCode.Win.csproj`
+- Run: `dotnet run --project src/OneCode.Win/OneCode.Win.csproj`
+- This is a Windows Forms app that hosts the API with a system tray icon
+
 ### Frontend (React)
 All commands should be run from the `web/` directory:
 - Install dependencies: `npm ci`
 - Dev server: `npm run dev`
 - Build: `npm run build` (runs TypeScript check + Vite build)
 - Lint: `npm run lint`
+
+### Full Application Build
+To build the complete application with frontend bundled:
+```bash
+cd web && npm ci && npm run build && cd ..
+# Copy frontend build to backend wwwroot (use xcopy on Windows, rsync on Unix)
+dotnet build src/OneCode/OneCode.csproj -c Release
+```
 
 ## Architecture
 
@@ -81,6 +94,13 @@ The API follows a hybrid architecture with both minimal APIs and traditional con
 - Tailwind CSS v4 with `@tailwindcss/vite` plugin
 - Theme system with dark mode support (`next-themes`)
 - Path alias: `@/` maps to `web/src/`
+
+### OneCode.Win (Windows Desktop)
+
+`src/OneCode.Win/` is a Windows Forms application that:
+- Hosts the OneCode API as an embedded web server
+- Displays a system tray icon for background operation
+- References the main `OneCode` project and runs it in-process
 
 ### Codex Integration Flow
 
@@ -148,6 +168,14 @@ No automated tests are currently configured. When adding tests:
 - Place under `tests/` directory
 - Use xUnit for C# tests
 - Ensure `dotnet test` runs all tests
+
+## Commit Conventions
+
+Use Conventional Commits format:
+- `feat: …` for new features
+- `fix: …` for bug fixes
+- `chore: …` for maintenance tasks
+- `docs: …` for documentation changes
 
 ## Common Development Tasks
 

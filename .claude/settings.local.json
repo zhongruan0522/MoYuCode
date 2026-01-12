@@ -4,7 +4,8 @@
       "Bash(rm:*)",
       "Bash(npx tsc:*)",
       "Bash(dir:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(cat:*)"
     ]
   }
 }

@@ -58,6 +58,10 @@ function guessLanguageFromPath(filePath: string): string {
       return 'csharp'
     case 'sql':
       return 'sql'
+    case 'java':
+      return 'java'
+    case 'go':
+      return 'go'
     default:
       return 'plaintext'
   }

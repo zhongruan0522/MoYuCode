@@ -1580,7 +1580,7 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
                 height:'100%'
               }} className="min-h-0 flex-1 overflow-hidden">
                 <ProjectChat
-                  key={`${project.id}:${sessionId ?? 'new'}`}
+                  key={sessionId ?? 'new'}
                   project={project}
                   detailsOpen={detailsOpen}
                   detailsPortalTarget={detailsPortalTarget}

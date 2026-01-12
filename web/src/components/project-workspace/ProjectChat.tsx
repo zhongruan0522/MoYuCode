@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -44,9 +45,11 @@ import {
 } from '@/components/animate-ui/primitives/animate/tooltip'
 import { Check, ChevronDown, Eye, EyeOff, Image as ImageIcon, X } from 'lucide-react'
 import { useRouteTool } from '@/hooks/use-route-tool'
+import { useProjectChatStore, type ChatMessage, type TokenUsageArtifact } from '@/stores/projectChatStore'
 import { useToolInputParsers } from '@/components/project-workspace/tool-inputs/useToolInputParsers'
 import { ToolItemContent } from '@/components/project-workspace/tool-contents/ToolItemContent'
 import { ClaudeTodoWriteTool } from '@/components/project-workspace/ClaudeTodoWriteTool'
+import type { ExitPlanModeToolInput } from '@/components/project-workspace/tool-inputs/types'
 import { tryParseTodoWriteToolInput } from '@/lib/toolInputParsers'
 
 type ChatRole = 'user' | 'agent' | 'system'
@@ -59,19 +62,6 @@ type ChatImage = {
   fileName: string
   contentType: string
   sizeBytes: number
-}
-
-type ChatMessage = {
-  id: string
-  role: ChatRole
-  kind: ChatMessageKind
-  text: string
-  images?: ChatImage[]
-  toolName?: string
-  toolUseId?: string
-  toolInput?: string
-  toolOutput?: string
-  toolIsError?: boolean
 }
 
 type CodexEventLogItem = {
@@ -115,12 +105,6 @@ type TokenUsageSnapshot = {
   cachedInputTokens?: number
   outputTokens?: number
   reasoningOutputTokens?: number
-}
-
-type TokenUsageArtifact = {
-  total?: TokenUsageSnapshot
-  last?: TokenUsageSnapshot
-  modelContextWindow?: number
 }
 
 type ModelSelection = {
@@ -1607,7 +1591,73 @@ const ChatToolCallItem = memo(function ChatToolCallItem({
   const output = message.toolOutput ?? ''
   const isError = Boolean(message.toolIsError)
 
-  const inputData = useToolInputParsers(toolName, input)
+  const parsedInputData = useToolInputParsers(toolName, input)
+
+  const exitPlanFromOutput = useMemo(() => {
+    const trimmed = (output ?? '').trim()
+    if (!trimmed) return null
+
+    const tryExtractExitPlanFromValue = (value: unknown): ExitPlanModeToolInput | null => {
+      if (value == null) return null
+
+      if (typeof value === 'string') {
+        const nestedTrimmed = value.trim()
+        if (!nestedTrimmed) return null
+        if (nestedTrimmed.startsWith('{') || nestedTrimmed.startsWith('[')) {
+          const parsed = tryParseJsonValue(nestedTrimmed)
+          const extracted = parsed ? tryExtractExitPlanFromValue(parsed) : null
+          if (extracted) return extracted
+        }
+        return null
+      }
+
+      if (Array.isArray(value)) {
+        for (const entry of value) {
+          const extracted = tryExtractExitPlanFromValue(entry)
+          if (extracted) return extracted
+        }
+        return null
+      }
+
+      if (typeof value !== 'object') return null
+      const obj = value as Record<string, unknown>
+
+      const filePath =
+        typeof obj.filePath === 'string'
+          ? obj.filePath
+          : typeof obj.file_path === 'string'
+            ? obj.file_path
+            : null
+      const planValue = obj.plan
+      const plan = typeof planValue === 'string' ? planValue : null
+      const isAgent = obj.isAgent === true || obj.is_agent === true
+
+      if (filePath || planValue === null || typeof planValue === 'string') {
+        return {
+          plan: plan ?? null,
+          isAgent,
+          filePath: filePath ?? '',
+        }
+      }
+
+      for (const key of ['text', 'content', 'data']) {
+        const nested = tryExtractExitPlanFromValue(obj[key])
+        if (nested) return nested
+      }
+
+      return null
+    }
+
+    return tryExtractExitPlanFromValue(trimmed)
+  }, [output])
+
+  const inputData = useMemo(
+    () => ({
+      ...parsedInputData,
+      exitPlanModeInput: parsedInputData.exitPlanModeInput ?? exitPlanFromOutput ?? null,
+    }),
+    [parsedInputData, exitPlanFromOutput],
+  )
 
   const diffStats = useMemo(() => {
     if (!inputData.editInput) return null
@@ -1635,6 +1685,7 @@ const ChatToolCallItem = memo(function ChatToolCallItem({
   }, [output, inputData.readInput])
 
   const [readCodeFromApi, setReadCodeFromApi] = useState<string | null>(null)
+  const [planContent, setPlanContent] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -1661,6 +1712,30 @@ const ChatToolCallItem = memo(function ChatToolCallItem({
     }
   }, [inputData.readInput?.filePath, inputData.readInput?.offset, inputData.readInput?.limit])
 
+  useEffect(() => {
+    let cancelled = false
+    const filePath = inputData.exitPlanModeInput?.filePath
+    if (!filePath) {
+      setPlanContent(null)
+      return
+    }
+
+    setPlanContent(null)
+    void (async () => {
+      try {
+        const data = await api.fs.readFile(filePath)
+        if (cancelled) return
+        setPlanContent(typeof data.content === 'string' ? data.content : null)
+      } catch {
+        if (!cancelled) setPlanContent(null)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [inputData.exitPlanModeInput?.filePath])
+
   const readCode = readCodeFromApi ?? fallbackReadCode
 
   const title = useMemo(() => {
@@ -1681,6 +1756,12 @@ const ChatToolCallItem = memo(function ChatToolCallItem({
     }
     if (inputData.todoWriteInput) {
       return 'TodoWrite'
+    }
+    if (inputData.enterPlanModeInput) {
+      return 'EnterPlanMode'
+    }
+    if (inputData.exitPlanModeInput) {
+      return 'ExitPlanMode'
     }
     return toolName
   }, [inputData, toolName])
@@ -1705,6 +1786,12 @@ const ChatToolCallItem = memo(function ChatToolCallItem({
       return inputData.todoWriteInput.todos.length
         ? `${inputData.todoWriteInput.todos.length} todos`
         : '0 todos'
+    }
+    if (inputData.enterPlanModeInput) {
+      return truncateInlineText(inputData.enterPlanModeInput.message, 140)
+    }
+    if (inputData.exitPlanModeInput) {
+      return truncateInlineText(inputData.exitPlanModeInput.filePath || 'Plan completed', 140)
     }
     if (input) {
       return truncateInlineText(input, 140)
@@ -1762,6 +1849,7 @@ const ChatToolCallItem = memo(function ChatToolCallItem({
             isError={isError}
             readCode={readCode}
             editDiff={editDiff}
+            planContent={planContent}
             message={message}
             askUserQuestionDisabled={askUserQuestionDisabled}
             onSubmitAskUserQuestion={onSubmitAskUserQuestion}
@@ -2228,29 +2316,43 @@ export function ProjectChat({
   const workspacePath = project.workspacePath.trim()
   const routeTool = useRouteTool()
 
+  // 持久化状态管理
+  const chatStore = useProjectChatStore()
+  const currentProjectIdRef = useRef<string>(project.id)
+  const isInitializedRef = useRef(false)
+
+  // 获取当前项目的持久化状态
+  const getPersistedState = useCallback(() => {
+    return chatStore.getState(project.id)
+  }, [chatStore, project.id])
+
   useEffect(() => {
     if (sessionId) {
       sessionIdRef.current = sessionId
     }
   }, [sessionId])
 
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  // 从持久化状态初始化
+  const initialState = useMemo(() => getPersistedState(), [])
+  const [messages, setMessages] = useState<ChatMessage[]>(() =>
+    sessionId ? [] : initialState.messages
+  )
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [historyCursor, setHistoryCursor] = useState<number | null>(null)
   const [historyHasMore, setHistoryHasMore] = useState(false)
   const [historyInitialized, setHistoryInitialized] = useState(false)
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useState(() => initialState.draft)
   const [draftImages, setDraftImages] = useState<DraftImage[]>([])
-  const [todoDockOpen, setTodoDockOpen] = useState(false)
-  const [sending, setSending] = useState(false)
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
+  const [todoDockOpen, setTodoDockOpen] = useState(() => initialState.todoDockOpen)
+  const [sending, setSending] = useState(() => initialState.sending)
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(() => initialState.activeTaskId)
   const [activeReasoningMessageId, setActiveReasoningMessageId] = useState<string | null>(
-    null,
+    () => initialState.activeReasoningMessageId,
   )
   const [canceling, setCanceling] = useState(false)
   const [chatError, setChatError] = useState<string | null>(null)
-  const [toolOutput, setToolOutput] = useState('')
+  const [toolOutput, setToolOutput] = useState(() => initialState.toolOutput)
   const [providers, setProviders] = useState<ProviderDto[]>([])
   const [providersLoaded, setProvidersLoaded] = useState(false)
   const [modelSelection, setModelSelection] = useState<ModelSelection | null>(null)
@@ -2264,8 +2366,8 @@ export function ProjectChat({
 
   const [mentionToken, setMentionToken] = useState<MentionToken | null>(null)
   const [mentionActiveIndex, setMentionActiveIndex] = useState(0)
-  const [mentionedFiles, setMentionedFiles] = useState<MentionedFile[]>([])
-  const [includeActiveFileInPrompt, setIncludeActiveFileInPrompt] = useState(true)
+  const [mentionedFiles, setMentionedFiles] = useState<MentionedFile[]>(() => initialState.mentionedFiles)
+  const [includeActiveFileInPrompt, setIncludeActiveFileInPrompt] = useState(() => initialState.includeActiveFileInPrompt)
 
   const [workspaceFiles, setWorkspaceFiles] = useState<string[]>([])
   const [workspaceFilesTruncated, setWorkspaceFilesTruncated] = useState(false)
@@ -2287,17 +2389,243 @@ export function ProjectChat({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const draftImagesRef = useRef<DraftImage[]>([])
 
-  const [thinkOpenById, setThinkOpenById] = useState<Record<string, boolean>>({})
-  const [toolOpenById, setToolOpenById] = useState<Record<string, boolean>>({})
+  const [thinkOpenById, setThinkOpenById] = useState<Record<string, boolean>>(() => initialState.thinkOpenById)
+  const [toolOpenById, setToolOpenById] = useState<Record<string, boolean>>(() => initialState.toolOpenById)
   const [tokenByMessageId, setTokenByMessageId] = useState<Record<string, TokenUsageArtifact>>(
-    {},
+    () => initialState.tokenByMessageId,
   )
 
-  const [rawEvents, setRawEvents] = useState<CodexEventLogItem[]>([])
+  const [rawEvents, setRawEvents] = useState<CodexEventLogItem[]>(() => initialState.rawEvents)
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [modelPickerQuery, setModelPickerQuery] = useState('')
   const modelPickerSearchRef = useRef<HTMLInputElement | null>(null)
   const [customModelsByProvider, setCustomModelsByProvider] = useState<Record<string, string[]>>({})
+
+  // 恢复滚动位置
+  useLayoutEffect(() => {
+    if (!isInitializedRef.current && scrollRef.current && initialState.scrollTop > 0) {
+      scrollRef.current.scrollTop = initialState.scrollTop
+    }
+    isInitializedRef.current = true
+  }, [initialState.scrollTop])
+
+  // 当项目切换时，从 store 恢复状态
+  useEffect(() => {
+    if (currentProjectIdRef.current === project.id) return
+
+    // 保存当前项目的状态
+    chatStore.setState(currentProjectIdRef.current, {
+      messages: sessionId ? [] : messages,
+      draft,
+      thinkOpenById,
+      toolOpenById,
+      tokenByMessageId,
+      rawEvents,
+      toolOutput,
+      mentionedFiles,
+      includeActiveFileInPrompt,
+      todoDockOpen,
+      scrollTop: scrollRef.current?.scrollTop ?? 0,
+      sending,
+      activeTaskId,
+      activeReasoningMessageId,
+    })
+
+    // 更新当前项目 ID
+    currentProjectIdRef.current = project.id
+
+    // 从 store 恢复新项目的状态
+    const newState = chatStore.getState(project.id)
+    if (!sessionId) {
+      setMessages(newState.messages)
+    }
+    setDraft(newState.draft)
+    setThinkOpenById(newState.thinkOpenById)
+    setToolOpenById(newState.toolOpenById)
+    setTokenByMessageId(newState.tokenByMessageId)
+    setRawEvents(newState.rawEvents)
+    setToolOutput(newState.toolOutput)
+    setMentionedFiles(newState.mentionedFiles)
+    setIncludeActiveFileInPrompt(newState.includeActiveFileInPrompt)
+    setTodoDockOpen(newState.todoDockOpen)
+    setSending(newState.sending)
+    setActiveTaskId(newState.activeTaskId)
+    setActiveReasoningMessageId(newState.activeReasoningMessageId)
+
+    // 恢复滚动位置
+    if (scrollRef.current && newState.scrollTop > 0) {
+      scrollRef.current.scrollTop = newState.scrollTop
+    }
+  }, [project.id])
+
+  // 同步状态到 store（使用 debounce 避免频繁更新）
+  const syncTimeoutRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (syncTimeoutRef.current) {
+      window.clearTimeout(syncTimeoutRef.current)
+    }
+    syncTimeoutRef.current = window.setTimeout(() => {
+      chatStore.setState(project.id, {
+        messages: sessionId ? [] : messages,
+        draft,
+        thinkOpenById,
+        toolOpenById,
+        tokenByMessageId,
+        rawEvents,
+        toolOutput,
+        mentionedFiles,
+        includeActiveFileInPrompt,
+        todoDockOpen,
+        scrollTop: scrollRef.current?.scrollTop ?? 0,
+        sending,
+        activeTaskId,
+        activeReasoningMessageId,
+      })
+    }, 300)
+
+    return () => {
+      if (syncTimeoutRef.current) {
+        window.clearTimeout(syncTimeoutRef.current)
+      }
+    }
+  }, [
+    chatStore,
+    project.id,
+    sessionId,
+    messages,
+    draft,
+    thinkOpenById,
+    toolOpenById,
+    tokenByMessageId,
+    rawEvents,
+    toolOutput,
+    mentionedFiles,
+    includeActiveFileInPrompt,
+    todoDockOpen,
+    sending,
+    activeTaskId,
+    activeReasoningMessageId,
+  ])
+
+  // 组件卸载时立即保存状态
+  useEffect(() => {
+    return () => {
+      if (syncTimeoutRef.current) {
+        window.clearTimeout(syncTimeoutRef.current)
+      }
+      chatStore.setState(project.id, {
+        messages: sessionId ? [] : messages,
+        draft,
+        thinkOpenById,
+        toolOpenById,
+        tokenByMessageId,
+        rawEvents,
+        toolOutput,
+        mentionedFiles,
+        includeActiveFileInPrompt,
+        todoDockOpen,
+        scrollTop: scrollRef.current?.scrollTop ?? 0,
+        sending,
+        activeTaskId,
+        activeReasoningMessageId,
+      })
+    }
+  }, [])
+
+  // 当组件挂载时，如果有活跃的任务，尝试重新订阅
+  // 这处理了用户切换页面后返回的情况
+  useEffect(() => {
+    if (!sending || !activeTaskId) return
+    if (sessionId) return // 历史会话不需要重新订阅
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    const resubscribe = async () => {
+      try {
+        const request = {
+          jsonrpc: '2.0',
+          id: randomId('req'),
+          method: 'tasks/resubscribe',
+          params: {
+            id: activeTaskId,
+          },
+        }
+
+        const res = await fetch(`${apiBase}/api/a2a`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'text/event-stream',
+          },
+          body: JSON.stringify(request),
+          signal: controller.signal,
+        })
+
+        if (!res.ok) {
+          // 任务可能已经完成或不存在，重置状态
+          setSending(false)
+          setActiveTaskId(null)
+          setActiveReasoningMessageId(null)
+          return
+        }
+
+        // 处理 SSE 响应 - 简化版本，只处理完成状态
+        for await (const data of readSseText(res)) {
+          if (!data) continue
+
+          let payload: unknown
+          try {
+            payload = JSON.parse(data)
+          } catch {
+            continue
+          }
+
+          if (!payload || typeof payload !== 'object') continue
+          const envelope = payload as { error?: unknown; result?: unknown }
+
+          if (envelope.error) {
+            setSending(false)
+            setActiveTaskId(null)
+            setActiveReasoningMessageId(null)
+            return
+          }
+
+          const result = envelope.result ?? null
+          if (!result || typeof result !== 'object') continue
+
+          const resultObj = result as { statusUpdate?: unknown }
+          const statusUpdate = resultObj.statusUpdate as { final?: boolean } | null
+
+          // 如果收到 final 状态，说明任务已完成
+          if (statusUpdate?.final) {
+            setSending(false)
+            setActiveTaskId(null)
+            setActiveReasoningMessageId(null)
+            return
+          }
+        }
+
+        // SSE 流结束
+        setSending(false)
+        setActiveTaskId(null)
+        setActiveReasoningMessageId(null)
+      } catch (e) {
+        if ((e as Error).name !== 'AbortError') {
+          setSending(false)
+          setActiveTaskId(null)
+          setActiveReasoningMessageId(null)
+        }
+      }
+    }
+
+    void resubscribe()
+
+    return () => {
+      // 组件卸载时不取消请求，让它在后台继续运行
+      // controller.abort()
+    }
+  }, []) // 只在组件挂载时运行一次
 
   const modelSelectionStorageKey = useMemo(() => {
     return `onecode:chat:model-selection:v2:${project.id}`
@@ -3849,9 +4177,6 @@ export function ProjectChat({
 
   const submitAskUserQuestion = useCallback(
     async (toolUseId: string, answers: Record<string, string>, messageId: string) => {
-      if (!activeTaskId) return
-      if (!toolUseId) return
-
       const formatted = formatAskUserQuestionAnswers(answers)
 
       setMessages((prev) =>
@@ -3862,9 +4187,13 @@ export function ProjectChat({
                 toolIsError: false,
                 toolOutput: formatted ? `User answers: ${formatted}` : 'User answered.',
               }
-            : m,
+              : m,
         ),
       )
+
+      if (!activeTaskId || !toolUseId) {
+        return
+      }
 
       try {
         const request = {
@@ -4027,7 +4356,7 @@ export function ProjectChat({
               setToolOpenById={setToolOpenById}
               tokenByMessageId={tokenByMessageId}
               onSubmitAskUserQuestion={submitAskUserQuestion}
-              askUserQuestionDisabled={sending || !activeTaskId || canceling}
+              askUserQuestionDisabled={sending || canceling}
               onComposeAskUserQuestion={composeAskUserQuestionAnswers}
             />
           </div>

@@ -43,7 +43,7 @@ import {
 } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
 import { ProjectWorkspacePage, type ProjectWorkspaceHandle } from '@/pages/ProjectWorkspacePage'
-import { FileText, Folder, RefreshCw, Terminal, X } from 'lucide-react'
+import { FileText, Folder, Pin, RefreshCw, Terminal, X } from 'lucide-react'
 import { useRouteTool } from '@/hooks/use-route-tool'
 
 type CodePageConfig = {
@@ -228,6 +228,7 @@ function mergeProjects(a: ProjectDto[], b: ProjectDto[]): ProjectDto[] {
   for (const p of [...a, ...b]) map.set(p.id, p)
   const merged = Array.from(map.values())
   merged.sort((x, y) => {
+    if (x.isPinned !== y.isPinned) return x.isPinned ? -1 : 1
     const ax = Date.parse(x.updatedAtUtc || x.createdAtUtc)
     const ay = Date.parse(y.updatedAtUtc || y.createdAtUtc)
     if (!Number.isNaN(ax) && !Number.isNaN(ay) && ax !== ay) return ay - ax
@@ -904,6 +905,12 @@ export function CodePage() {
     })
   }, [selectedSession])
 
+  const startNewSession = useCallback(() => {
+    closeSessionsMenu()
+    setSelectedSessionId(null)
+    setLoadedSessionId(null)
+  }, [closeSessionsMenu])
+
   useEffect(() => {
     if (projectIdFromQuery) return
     if (!projects.length) return
@@ -1027,7 +1034,7 @@ export function CodePage() {
 
       if (typeof window === 'undefined') return
       const menuWidth = 220
-      const menuHeight = 180
+      const menuHeight = 220
       const x = Math.min(e.clientX, Math.max(0, window.innerWidth - menuWidth))
       const y = Math.min(e.clientY, Math.max(0, window.innerHeight - menuHeight))
       setProjectMenuTarget(project)
@@ -1116,6 +1123,18 @@ export function CodePage() {
     }
   }, [clearSelection, deleteTarget, loadProjects, selectedProject])
 
+  const updateProjectPinned = useCallback(
+    async (project: ProjectDto, isPinned: boolean) => {
+      try {
+        await api.projects.updatePin(project.id, { isPinned })
+        await loadProjects()
+      } catch (e) {
+        setError((e as Error).message)
+      }
+    },
+    [loadProjects],
+  )
+
   const pickerButtonLabel = useMemo(() => {
     if (selectedProject) return selectedProject.name
     return '选择项目'
@@ -1150,6 +1169,7 @@ export function CodePage() {
         sessionsLoading={sessionsLoading}
         sessionsCount={sessions.length}
         onToggleSessions={toggleSessionsMenu}
+        onNewSession={startNewSession}
         onOpenEnvironment={openEnvironmentEditor}
         actionsAnchorRef={actionsAnchorRef}
         actionsOpen={actionsMenuOpen}
@@ -1196,7 +1216,6 @@ export function CodePage() {
             <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
               <ProjectWorkspacePage
                 ref={workspaceRef}
-                key={selectedProject.id}
                 projectId={selectedProject.id}
                 sessionId={loadedSessionId}
                 currentToolType={routeTool.toolType}
@@ -1561,7 +1580,12 @@ export function CodePage() {
                       >
                         <Folder className={cn('mt-0.5 size-4 shrink-0', active ? 'text-inherit' : 'text-muted-foreground')} />
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm">{p.name}</span>
+                          <span className="flex items-center gap-1 truncate text-sm">
+                            {p.isPinned ? (
+                              <Pin className="size-3 shrink-0 text-muted-foreground" />
+                            ) : null}
+                            <span className="truncate">{p.name}</span>
+                          </span>
                           <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
                             {p.workspacePath}
                           </span>
@@ -1619,6 +1643,19 @@ export function CodePage() {
                   onClick={() => openRename(projectMenuTarget)}
                 >
                   重命名
+                </button>
+                <button
+                  type="button"
+                  className="flex w-full items-center px-3 py-2 text-sm hover:bg-accent"
+                  onClick={() => {
+                    closeProjectMenu()
+                    void updateProjectPinned(
+                      projectMenuTarget,
+                      !projectMenuTarget.isPinned,
+                    )
+                  }}
+                >
+                  {projectMenuTarget.isPinned ? '取消置顶' : '置顶项目'}
                 </button>
                 <button
                   type="button"

@@ -1,9 +1,10 @@
-import { memo, useMemo } from 'react'
+import { memo, useMemo, useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useToolInputParsers } from '@/components/project-workspace/tool-inputs/useToolInputParsers'
+import type { ExitPlanModeToolInput } from '@/components/project-workspace/tool-inputs/types'
 import { ToolItemContent } from '@/components/project-workspace/tool-contents/ToolItemContent'
 import {
   buildReplacementDiff,
@@ -34,6 +35,73 @@ interface ChatToolCallItemProps {
   onComposeAskUserQuestion?: (answers: Record<string, string>) => void
 }
 
+function tryParseJsonValue(value: string): unknown | null {
+  const trimmed = (value ?? '').trim()
+  if (!trimmed) return null
+  try {
+    return JSON.parse(trimmed) as unknown
+  } catch {
+    return null
+  }
+}
+
+function tryExtractExitPlanFromValue(value: unknown): ExitPlanModeToolInput | null {
+  if (value == null) return null
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      const parsed = tryParseJsonValue(trimmed)
+      const extracted = parsed ? tryExtractExitPlanFromValue(parsed) : null
+      if (extracted) return extracted
+    }
+    return null
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const extracted = tryExtractExitPlanFromValue(entry)
+      if (extracted) return extracted
+    }
+    return null
+  }
+
+  if (typeof value !== 'object') return null
+  const obj = value as Record<string, unknown>
+
+  const filePath =
+    typeof obj.filePath === 'string'
+      ? obj.filePath
+      : typeof obj.file_path === 'string'
+        ? obj.file_path
+        : null
+  const planValue = obj.plan
+  const plan = typeof planValue === 'string' ? planValue : null
+  const isAgent = obj.isAgent === true || obj.is_agent === true
+
+  if (filePath || planValue === null || typeof planValue === 'string') {
+    return {
+      plan: plan ?? null,
+      isAgent,
+      filePath: filePath ?? '',
+    }
+  }
+
+  for (const key of ['text', 'content', 'data']) {
+    const nested = tryExtractExitPlanFromValue(obj[key])
+    if (nested) return nested
+  }
+
+  return null
+}
+
+function parseExitPlanOutput(output: string): ExitPlanModeToolInput | null {
+  const trimmed = (output ?? '').trim()
+  if (!trimmed) return null
+  return tryExtractExitPlanFromValue(trimmed)
+}
+
 export const ChatToolCallItem = memo(function ChatToolCallItem({
   message,
   openById,
@@ -48,7 +116,15 @@ export const ChatToolCallItem = memo(function ChatToolCallItem({
   const output = message.toolOutput ?? ''
   const isError = Boolean(message.toolIsError)
 
-  const inputData = useToolInputParsers(toolName, input)
+  const parsedInputData = useToolInputParsers(toolName, input)
+  const exitPlanFromOutput = useMemo(() => parseExitPlanOutput(output), [output])
+  const inputData = useMemo(
+    () => ({
+      ...parsedInputData,
+      exitPlanModeInput: parsedInputData.exitPlanModeInput ?? exitPlanFromOutput ?? null,
+    }),
+    [parsedInputData, exitPlanFromOutput],
+  )
 
   const diffStats = useMemo(() => {
     if (!inputData.editInput) return null
@@ -75,6 +151,28 @@ export const ChatToolCallItem = memo(function ChatToolCallItem({
     return normalizeReadToolOutputForMonaco(extracted ?? output)
   }, [output, inputData.readInput])
 
+  const [planContent, setPlanContent] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!inputData.exitPlanModeInput?.filePath) {
+      setPlanContent(null)
+      return
+    }
+    const filePath = inputData.exitPlanModeInput.filePath
+    fetch(`/api/filesystem/read?path=${encodeURIComponent(filePath)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.data?.content) {
+          setPlanContent(data.data.content)
+        } else if (typeof data.content === 'string') {
+          setPlanContent(data.content)
+        }
+      })
+      .catch(() => {
+        setPlanContent(null)
+      })
+  }, [inputData.exitPlanModeInput?.filePath])
+
   const title = useMemo(() => {
     if (inputData.editInput) {
       return `Edit ${getBaseName(inputData.editInput.filePath)}`
@@ -91,6 +189,9 @@ export const ChatToolCallItem = memo(function ChatToolCallItem({
     if (inputData.globInput) {
       return 'Glob'
     }
+    if (inputData.grepInput) {
+      return 'Grep'
+    }
     if (inputData.taskInput) {
       return `Task${inputData.taskInput.subagentType ? ` ${inputData.taskInput.subagentType}` : ''}`
     }
@@ -99,6 +200,12 @@ export const ChatToolCallItem = memo(function ChatToolCallItem({
     }
     if (inputData.todoWriteInput) {
       return 'TodoWrite'
+    }
+    if (inputData.enterPlanModeInput) {
+      return 'EnterPlanMode'
+    }
+    if (inputData.exitPlanModeInput) {
+      return 'ExitPlanMode'
     }
     return toolName
   }, [inputData, toolName])
@@ -119,6 +226,9 @@ export const ChatToolCallItem = memo(function ChatToolCallItem({
     if (inputData.globInput) {
       return truncateInlineText(inputData.globInput.pattern, 140)
     }
+    if (inputData.grepInput) {
+      return truncateInlineText(inputData.grepInput.pattern, 140)
+    }
     if (inputData.taskInput) {
       return truncateInlineText(inputData.taskInput.description || inputData.taskInput.prompt || inputData.taskInput.subagentType, 140)
     }
@@ -130,14 +240,28 @@ export const ChatToolCallItem = memo(function ChatToolCallItem({
         ? `${inputData.todoWriteInput.todos.length} todos`
         : '0 todos'
     }
+    if (inputData.enterPlanModeInput) {
+      return truncateInlineText(inputData.enterPlanModeInput.message, 140)
+    }
+    if (inputData.exitPlanModeInput) {
+      return truncateInlineText(inputData.exitPlanModeInput.filePath || 'Plan completed', 140)
+    }
     if (input) {
       return truncateInlineText(input, 140)
     }
     return ''
   }, [inputData, input])
 
+  const isReadTool = Boolean(inputData.readInput)
+  const shouldExpandWidth = open && isReadTool
+
   return (
-    <div className="rounded-md border bg-background/40">
+    <div
+      className={cn(
+        'rounded-md border bg-background/40',
+        shouldExpandWidth && 'w-[80%]'
+      )}
+    >
       <Button
         type="button"
         variant="ghost"
@@ -186,6 +310,7 @@ export const ChatToolCallItem = memo(function ChatToolCallItem({
             isError={isError}
             readCode={readCode}
             editDiff={editDiff}
+            planContent={planContent}
             message={message}
             askUserQuestionDisabled={askUserQuestionDisabled}
             onSubmitAskUserQuestion={onSubmitAskUserQuestion}

@@ -16,8 +16,11 @@ export const ReadToolContent = memo(function ReadToolContent({ input, code }: Re
           <TooltipContent className="max-w-xs break-all">{input.filePath}</TooltipContent>
         </Tooltip>
       </div>
-      <div className="h-[240px] overflow-hidden rounded-md border bg-background">
+      <div style={{
+        minWidth:'380px'
+      }} className="h-[240px] overflow-hidden rounded-md border bg-background">
         <MonacoCode
+          
           code={code}
           filePath={input.filePath}
           className="h-full"

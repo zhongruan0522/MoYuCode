@@ -893,7 +893,7 @@ public static class ApiEndpoints
             return Directory.Exists(candidate) || File.Exists(candidate);
         });
 
-        fs.MapGet("/file", (string path) =>
+        fs.MapGet("/file", (string path, long? offset, int? limit) =>
         {
             if (string.IsNullOrWhiteSpace(path))
             {
@@ -907,12 +907,26 @@ public static class ApiEndpoints
             }
 
             const int maxBytes = 200_000;
+            var normalizedOffset = offset ?? 0;
+            if (normalizedOffset < 0)
+            {
+                throw new ApiHttpException(StatusCodes.Status400BadRequest, "Offset must be non-negative.");
+            }
+
+            var normalizedLimit = limit ?? maxBytes;
+            if (normalizedLimit <= 0)
+            {
+                throw new ApiHttpException(StatusCodes.Status400BadRequest, "Limit must be positive.");
+            }
+
+            normalizedLimit = Math.Min(normalizedLimit, maxBytes);
 
             try
             {
                 var fileInfo = new FileInfo(normalizedPath);
                 var sizeBytes = fileInfo.Length;
-                var readSize = (int)Math.Min(maxBytes, Math.Max(0, sizeBytes));
+                var availableBytes = Math.Max(0, sizeBytes - normalizedOffset);
+                var readSize = (int)Math.Min(availableBytes, normalizedLimit);
                 var buffer = readSize == 0 ? Array.Empty<byte>() : new byte[readSize];
 
                 if (buffer.Length > 0)
@@ -923,21 +937,23 @@ public static class ApiEndpoints
                         FileAccess.Read,
                         FileShare.ReadWrite);
 
-                    var offset = 0;
-                    while (offset < buffer.Length)
+                    stream.Seek(normalizedOffset, SeekOrigin.Begin);
+
+                    var totalRead = 0;
+                    while (totalRead < buffer.Length)
                     {
-                        var read = stream.Read(buffer, offset, buffer.Length - offset);
+                        var read = stream.Read(buffer, totalRead, buffer.Length - totalRead);
                         if (read <= 0)
                         {
                             break;
                         }
 
-                        offset += read;
+                        totalRead += read;
                     }
 
-                    if (offset != buffer.Length)
+                    if (totalRead != buffer.Length)
                     {
-                        buffer = buffer[..offset];
+                        buffer = buffer[..totalRead];
                     }
                 }
 
@@ -967,11 +983,12 @@ public static class ApiEndpoints
 
                 var isBinary = LooksBinary(buffer);
                 var content = isBinary ? string.Empty : Encoding.UTF8.GetString(buffer);
+                var truncated = normalizedOffset > 0 || sizeBytes > normalizedOffset + buffer.Length;
 
                 return new ReadFileResponse(
                     Path: normalizedPath,
                     Content: content,
-                    Truncated: sizeBytes > maxBytes,
+                    Truncated: truncated,
                     IsBinary: isBinary,
                     SizeBytes: sizeBytes);
             }
@@ -1502,7 +1519,8 @@ public static class ApiEndpoints
         {
             var list = store.Projects
                 .Where(x => x.ToolType == toolType)
-                .OrderBy(x => x.Name)
+                .OrderByDescending(x => x.IsPinned)
+                .ThenBy(x => x.Name)
                 .ToList();
 
             // Load provider references
@@ -1652,6 +1670,24 @@ public static class ApiEndpoints
                 var provider = store.Providers.FirstOrDefault(p => p.Id == entity.ProviderId.Value);
                 entity.Provider = provider;
             }
+
+            return ToDto(entity);
+        });
+
+        projects.MapPut("/{id:guid}/pin", async (
+            Guid id,
+            [FromBody] ProjectPinUpdateRequest request,
+            JsonDataStore store) =>
+        {
+            var entity = store.Projects.FirstOrDefault(x => x.Id == id);
+            if (entity is null)
+            {
+                throw new ApiHttpException(StatusCodes.Status404NotFound, "Project not found.");
+            }
+
+            entity.IsPinned = request.IsPinned;
+            entity.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            await store.SaveDataAsync();
 
             return ToDto(entity);
         });
@@ -6738,6 +6774,7 @@ public static class ApiEndpoints
             ProviderId: entity.ProviderId,
             ProviderName: entity.Provider?.Name,
             Model: entity.Model,
+            IsPinned: entity.IsPinned,
             LastStartedAtUtc: entity.LastStartedAtUtc,
             CreatedAtUtc: entity.CreatedAtUtc,
             UpdatedAtUtc: entity.UpdatedAtUtc);

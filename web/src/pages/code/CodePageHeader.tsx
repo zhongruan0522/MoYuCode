@@ -16,6 +16,7 @@ export function CodePageHeader({
   sessionsLoading,
   sessionsCount,
   onToggleSessions,
+  onNewSession,
   onOpenEnvironment,
   actionsAnchorRef,
   actionsOpen,
@@ -38,6 +39,7 @@ export function CodePageHeader({
   sessionsLoading: boolean
   sessionsCount: number
   onToggleSessions: () => void
+  onNewSession: () => void
   onOpenEnvironment: () => void
   actionsAnchorRef: RefObject<HTMLButtonElement | null>
   actionsOpen: boolean
@@ -105,6 +107,16 @@ export function CodePageHeader({
               )}
             />
           </button>
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={sessionsDisabled}
+          onClick={onNewSession}
+          title={sessionsDisabled ? '选择项目后可新增会话' : '新增会话'}
+        >
+          新增会话
         </Button>
         <Button asChild variant="outline" size="sm" className="group">
           <button

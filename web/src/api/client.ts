@@ -9,6 +9,7 @@ import type {
   ProjectSessionDto,
   ProjectSessionMessagesPageDto,
   ProjectUpsertRequest,
+  ProjectPinUpdateRequest,
   CodexDailyTokenUsageDto,
   SessionTokenUsageDto,
   CreateEntryRequest,
@@ -166,6 +167,8 @@ export const api = {
       http<ProjectDto>(`/api/projects`, { method: 'POST', body: JSON.stringify(body) }),
     update: (id: string, body: ProjectUpsertRequest) =>
       http<ProjectDto>(`/api/projects/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+    updatePin: (id: string, body: ProjectPinUpdateRequest) =>
+      http<ProjectDto>(`/api/projects/${id}/pin`, { method: 'PUT', body: JSON.stringify(body) }),
     delete: (id: string) => http<void>(`/api/projects/${id}`, { method: 'DELETE' }),
     start: (id: string) => http<void>(`/api/projects/${id}/start`, { method: 'POST' }),
     environment: (id: string) =>

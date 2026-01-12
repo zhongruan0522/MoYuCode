@@ -30,6 +30,8 @@ public sealed class ProjectEntity
     [MaxLength(200)]
     public string? Model { get; set; }
 
+    public bool IsPinned { get; set; }
+
     public Dictionary<string, string> LaunchEnvironment { get; set; } = new(StringComparer.Ordinal);
 
     public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;

@@ -7,8 +7,10 @@ import { ReadToolContent } from '@/components/project-workspace/tool-contents/Re
 import { EditToolContent } from '@/components/project-workspace/tool-contents/EditToolContent'
 import { BashToolContent } from '@/components/project-workspace/tool-contents/BashToolContent'
 import { GlobToolContent } from '@/components/project-workspace/tool-contents/GlobToolContent'
+import { GrepToolContent } from '@/components/project-workspace/tool-contents/GrepToolContent'
 import { DefaultToolContent } from '@/components/project-workspace/tool-contents/DefaultToolContent'
 import { ToolOutputContent } from '@/components/project-workspace/tool-contents/ToolOutputContent'
+import { EnterPlanModeToolContent, ExitPlanModeToolContent } from '@/components/project-workspace/tool-contents/PlanModeToolContent'
 import type { ToolInputData } from '@/components/project-workspace/tool-inputs/useToolInputParsers'
 
 interface ToolItemContentProps {
@@ -17,6 +19,7 @@ interface ToolItemContentProps {
   isError: boolean
   readCode: string | null
   editDiff: string
+  planContent: string | null
   message: {
     id: string
     toolUseId?: string
@@ -32,12 +35,13 @@ export const ToolItemContent = memo(function ToolItemContent({
   isError,
   readCode,
   editDiff,
+  planContent,
   message,
   askUserQuestionDisabled,
   onSubmitAskUserQuestion,
   onComposeAskUserQuestion,
 }: ToolItemContentProps) {
-  const { taskInput, askInput, writeInput, readInput, editInput, todoWriteInput, bashInput, globInput } = inputData
+  const { taskInput, askInput, writeInput, readInput, editInput, todoWriteInput, bashInput, globInput, grepInput, enterPlanModeInput, exitPlanModeInput } = inputData
 
   const askAlreadyAnswered = Boolean(
     askInput?.answers &&
@@ -51,6 +55,9 @@ export const ToolItemContent = memo(function ToolItemContent({
     !editInput &&
     !bashInput &&
     !globInput &&
+    !grepInput &&
+    !enterPlanModeInput &&
+    !exitPlanModeInput &&
     (!todoWriteInput || isError) &&
     (!readInput || isError) &&
     (!taskInput || isError)
@@ -80,8 +87,16 @@ export const ToolItemContent = memo(function ToolItemContent({
         <BashToolContent input={bashInput} output={output} />
       ) : globInput ? (
         <GlobToolContent input={globInput} output={output} />
+      ) : grepInput ? (
+        <GrepToolContent input={grepInput} output={output} />
       ) : todoWriteInput ? (
         <ClaudeTodoWriteTool input={todoWriteInput} />
+      ) : enterPlanModeInput ? (
+        <EnterPlanModeToolContent input={enterPlanModeInput} />
+      ) : exitPlanModeInput ? (
+        <>
+        <ExitPlanModeToolContent input={exitPlanModeInput} planContent={output} />
+        </>
       ) : (
         <DefaultToolContent input={output || ''} />
       )}

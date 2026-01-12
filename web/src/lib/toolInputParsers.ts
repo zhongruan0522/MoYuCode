@@ -1,6 +1,7 @@
 import type { TaskToolInput } from '@/components/project-workspace/tool-inputs/taskType'
 import type { TodoWriteToolInput, TodoWriteToolTodo, TodoWriteStatus } from '@/components/project-workspace/tool-inputs/todoType'
 import type { AskUserQuestionToolInput, AskUserQuestionToolQuestion, AskUserQuestionToolOption } from '@/components/project-workspace/tool-inputs/askType'
+import type { EnterPlanModeToolInput, ExitPlanModeToolInput } from '@/components/project-workspace/tool-inputs/planModeType'
 
 export type ReadToolInput = {
   filePath: string
@@ -17,6 +18,14 @@ export type BashToolInput = {
 export type GlobToolInput = {
   pattern: string
   path?: string
+}
+
+export type GrepToolInput = {
+  pattern: string
+  path?: string
+  outputMode?: string
+  glob?: string
+  type?: string
 }
 
 export type WriteToolInput = {
@@ -84,6 +93,11 @@ export function isGlobToolName(toolName: string): boolean {
   return baseName === 'glob' || baseName.endsWith('glob')
 }
 
+export function isGrepToolName(toolName: string): boolean {
+  const baseName = getBaseToolName(toolName)
+  return baseName === 'grep' || baseName.endsWith('grep')
+}
+
 export function isTodoWriteToolName(toolName: string): boolean {
   const baseName = getBaseToolName(toolName)
   return baseName === 'todowrite' || baseName.endsWith('todowrite')
@@ -92,6 +106,16 @@ export function isTodoWriteToolName(toolName: string): boolean {
 export function isTaskToolName(toolName: string): boolean {
   const baseName = getBaseToolName(toolName)
   return baseName === 'task' || baseName.endsWith('task')
+}
+
+export function isEnterPlanModeToolName(toolName: string): boolean {
+  const baseName = getBaseToolName(toolName)
+  return baseName === 'enterplanmode' || baseName.endsWith('enterplanmode')
+}
+
+export function isExitPlanModeToolName(toolName: string): boolean {
+  const baseName = getBaseToolName(toolName)
+  return baseName === 'exitplanmode' || baseName.endsWith('exitplanmode')
 }
 
 function unwrapToolArgsRecord(obj: Record<string, unknown>): Record<string, unknown> {
@@ -267,6 +291,28 @@ export function tryParseGlobToolInput(input: string): GlobToolInput | null {
   }
 }
 
+export function tryParseGrepToolInput(input: string): GrepToolInput | null {
+  const obj = tryParseJsonRecord(input)
+  if (!obj) return null
+  const args = unwrapToolArgsRecord(obj)
+
+  const pattern = readFirstString(args, ['pattern'])
+  if (!pattern) return null
+
+  const path = readFirstString(args, ['path', 'directory', 'dir'])
+  const outputMode = readFirstString(args, ['output_mode', 'outputMode', 'mode'])
+  const glob = readFirstString(args, ['glob'])
+  const type = readFirstString(args, ['type'])
+
+  return {
+    pattern,
+    path: path ?? undefined,
+    outputMode: outputMode ?? undefined,
+    glob: glob ?? undefined,
+    type: type ?? undefined,
+  }
+}
+
 function normalizeTodoWriteStatus(value: unknown): TodoWriteStatus {
   const raw = typeof value === 'string' ? value.trim() : ''
   const key = raw.toLowerCase().replace(/[^a-z0-9]+/g, '_')
@@ -372,4 +418,25 @@ export function tryParseAskUserQuestionToolInput(input: string): AskUserQuestion
   }
 
   return answers ? { questions, answers } : { questions }
+}
+
+export function tryParseEnterPlanModeToolInput(input: string): EnterPlanModeToolInput | null {
+  const obj = tryParseJsonRecord(input)
+  if (!obj) return null
+  const args = unwrapToolArgsRecord(obj)
+
+  const message = readFirstString(args, ['message', 'msg']) ?? ''
+  return { message }
+}
+
+export function tryParseExitPlanModeToolInput(input: string): ExitPlanModeToolInput | null {
+  const obj = tryParseJsonRecord(input)
+  if (!obj) return null
+  const args = unwrapToolArgsRecord(obj)
+
+  const plan = readFirstString(args, ['plan'])
+  const isAgent = args.isAgent === true || args.is_agent === true
+  const filePath = readFirstString(args, ['filePath', 'file_path', 'path']) ?? ''
+
+  return { plan, isAgent, filePath }
 }

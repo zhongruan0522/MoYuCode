@@ -3,7 +3,7 @@ import type { ProjectDto, ToolStatusDto } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
-import { MoreHorizontal, Plus, Search } from 'lucide-react'
+import { MoreHorizontal, Pin, Plus, Search } from 'lucide-react'
 
 export function ProjectSelectionCard({
   projects,
@@ -134,7 +134,12 @@ export function ProjectSelectionCard({
                   )}
                   onClick={() => onSelectProject(p.id)}
                 >
-                  <div className="truncate text-sm font-medium">{p.name}</div>
+                  <div className="flex items-center gap-1 truncate text-sm font-medium">
+                    {p.isPinned ? (
+                      <Pin className="size-3 shrink-0 text-muted-foreground" />
+                    ) : null}
+                    <span className="truncate">{p.name}</span>
+                  </div>
                   <div className="mt-1 truncate text-xs text-muted-foreground">
                     {p.workspacePath}
                   </div>
