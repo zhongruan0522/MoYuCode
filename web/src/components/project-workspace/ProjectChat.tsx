@@ -2602,11 +2602,11 @@ export function ProjectChat({
   }, []) // 只在组件挂载时运行一次
 
   const modelSelectionStorageKey = useMemo(() => {
-    return `onecode:chat:model-selection:v2:${project.id}`
+    return `myyucode:chat:model-selection:v2:${project.id}`
   }, [project.id])
 
   const legacyModelOverrideStorageKey = useMemo(() => {
-    return `onecode:chat:model-override:v1:${project.id}`
+    return `myyucode:chat:model-override:v1:${project.id}`
   }, [project.id])
 
   const activeProviderId = useMemo(() => {
@@ -2615,7 +2615,7 @@ export function ProjectChat({
 
   const customModelStorageKey = useMemo(() => {
     const providerKey = activeProviderId ?? 'default'
-    return `onecode:chat:custom-models:v1:${project.toolType}:${providerKey}`
+    return `myyucode:chat:custom-models:v1:${project.toolType}:${providerKey}`
   }, [activeProviderId, project.toolType])
 
   const activeProvider = useMemo(() => {
@@ -2948,7 +2948,7 @@ export function ProjectChat({
 
     const next: Record<string, string[]> = {}
     for (const provider of providers) {
-      const customKey = `onecode:chat:custom-models:v1:${project.toolType}:${provider.id}`
+      const customKey = `myyucode:chat:custom-models:v1:${project.toolType}:${provider.id}`
       try {
         const raw = window.localStorage.getItem(customKey)
         if (!raw) continue
@@ -5043,7 +5043,7 @@ export function ProjectChat({
                   const lower = model.toLowerCase()
                   const providerHas = provider.models.some((m) => m.toLowerCase() === lower)
 
-                  const customKey = `onecode:chat:custom-models:v1:${project.toolType}:${providerId}`
+                  const customKey = `myyucode:chat:custom-models:v1:${project.toolType}:${providerId}`
                   const existingCustomModels =
                     providerId === activeProviderId
                       ? customModels

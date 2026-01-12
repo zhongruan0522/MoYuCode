@@ -4,20 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OneCode is a dual-stack application providing a web UI for AI coding assistants (Codex and Claude Code). The backend is an ASP.NET Core Web API (net10.0) that integrates with the OpenAI Codex app-server via JSON-RPC over stdio. The frontend is a Vite + React + TypeScript SPA with Tailwind CSS.
+MyYuCode（摸鱼Coding） is a dual-stack application providing a web UI for AI coding assistants (Codex and Claude Code). The backend is an ASP.NET Core Web API (net10.0) that integrates with the OpenAI Codex app-server via JSON-RPC over stdio. The frontend is a Vite + React + TypeScript SPA with Tailwind CSS.
 
 ## Build Commands
 
 ### Backend (C# API)
-- Build: `dotnet build src/OneCode/OneCode.csproj`
-- Run (HTTP): `dotnet run --project src/OneCode/OneCode.csproj --launch-profile http`
+- Build: `dotnet build src/MyYuCode/MyYuCode.csproj`
+- Run (HTTP): `dotnet run --project src/MyYuCode/MyYuCode.csproj --launch-profile http`
   - Runs on `http://localhost:9110`
-- Run (HTTPS): `dotnet run --project src/OneCode/OneCode.csproj --launch-profile https`
+- Run (HTTPS): `dotnet run --project src/MyYuCode/MyYuCode.csproj --launch-profile https`
   - Runs on `https://localhost:9111`
 
-### Windows Desktop App (OneCode.Win)
-- Build: `dotnet build src/OneCode.Win/OneCode.Win.csproj`
-- Run: `dotnet run --project src/OneCode.Win/OneCode.Win.csproj`
+### Windows Desktop App (MyYuCode.Win)
+- Build: `dotnet build src/MyYuCode.Win/MyYuCode.Win.csproj`
+- Run: `dotnet run --project src/MyYuCode.Win/MyYuCode.Win.csproj`
 - This is a Windows Forms app that hosts the API with a system tray icon
 
 ### Frontend (React)
@@ -32,7 +32,7 @@ To build the complete application with frontend bundled:
 ```bash
 cd web && npm ci && npm run build && cd ..
 # Copy frontend build to backend wwwroot (use xcopy on Windows, rsync on Unix)
-dotnet build src/OneCode/OneCode.csproj -c Release
+dotnet build src/MyYuCode/MyYuCode.csproj -c Release
 ```
 
 ## Architecture
@@ -66,9 +66,9 @@ The API follows a hybrid architecture with both minimal APIs and traditional con
 - `Shell/PowerShellLauncher`: PowerShell execution
 
 **Data** (`Data/` directory):
-- `OneCodeDbContext`: Entity Framework Core context (SQLite)
+- `MyYuCodeDbContext`: Entity Framework Core context (SQLite)
 - Entities: `ProjectEntity`, `ProviderEntity`
-- Database location: `%LOCALAPPDATA%\OneCode\onecode.sqlite`
+- Database location: `%LOCALAPPDATA%\myyucode\myyucode.sqlite`
 - Migrations: `LogMigrations/` directory
 
 ### Frontend Structure
@@ -95,12 +95,12 @@ The API follows a hybrid architecture with both minimal APIs and traditional con
 - Theme system with dark mode support (`next-themes`)
 - Path alias: `@/` maps to `web/src/`
 
-### OneCode.Win (Windows Desktop)
+### MyYuCode.Win (Windows Desktop)
 
-`src/OneCode.Win/` is a Windows Forms application that:
-- Hosts the OneCode API as an embedded web server
+`src/MyYuCode.Win/` is a Windows Forms application that:
+- Hosts the MyYuCode（摸鱼Coding） API as an embedded web server
 - Displays a system tray icon for background operation
-- References the main `OneCode` project and runs it in-process
+- References the main `MyYuCode` project and runs it in-process
 
 ### Codex Integration Flow
 
@@ -143,16 +143,16 @@ The API follows a hybrid architecture with both minimal APIs and traditional con
 
 ## Database Migrations
 
-Entity Framework Core migrations are in `src/OneCode/LogMigrations/`.
+Entity Framework Core migrations are in `src/MyYuCode/LogMigrations/`.
 
 To create a migration:
 ```bash
-dotnet ef migrations add MigrationName --project src/OneCode/OneCode.csproj --context OneCodeDbContext --output-dir LogMigrations
+dotnet ef migrations add MigrationName --project src/MyYuCode/MyYuCode.csproj --context MyYuCodeDbContext --output-dir LogMigrations
 ```
 
 To update the database (runs automatically on app startup):
 ```bash
-dotnet ef database update --project src/OneCode/OneCode.csproj --context OneCodeDbContext
+dotnet ef database update --project src/MyYuCode/MyYuCode.csproj --context MyYuCodeDbContext
 ```
 
 ## Windows-Specific Notes
@@ -179,6 +179,6 @@ Use Conventional Commits format:
 
 ## Common Development Tasks
 
-1. **Reset local database**: Delete `%LOCALAPPDATA%\OneCode\onecode.sqlite` and restart the API
+1. **Reset local database**: Delete `%LOCALAPPDATA%\myyucode\myyucode.sqlite` and restart the API
 2. **Debug Codex integration**: Check backend logs for `codex[stderr]` warnings and JSON-RPC traffic
 3. **Install Codex CLI**: `npm install -g @openai/codex` (required for backend functionality)

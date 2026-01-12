@@ -15,14 +15,14 @@ import { ArrowLeft } from 'lucide-react'
 
 const TOOL_USAGE_CACHE_TTL_MS = 2 * 60 * 1000
 const TOOL_USAGE_CACHE_KEYS: Record<ToolType, string> = {
-  Codex: 'onecode:codex:token-usage:total:v1',
-  ClaudeCode: 'onecode:claude:token-usage:total:v1',
+  Codex: 'myyucode:codex:token-usage:total:v1',
+  ClaudeCode: 'myyucode:claude:token-usage:total:v1',
 }
 
 const TOOL_DAILY_USAGE_CACHE_TTL_MS = 2 * 60 * 1000
 const TOOL_DAILY_USAGE_CACHE_KEYS: Record<ToolType, string> = {
-  Codex: 'onecode:codex:token-usage:daily:7:v1',
-  ClaudeCode: 'onecode:claude:token-usage:daily:7:v1',
+  Codex: 'myyucode:codex:token-usage:daily:7:v1',
+  ClaudeCode: 'myyucode:claude:token-usage:daily:7:v1',
 }
 
 type ToolTokenUsageCache = {

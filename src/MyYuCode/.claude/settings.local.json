@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git restore:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfeat: 版本更新 0.0.2.2 - Provider管理和Codex集成改进\n\n- 新增 Provider 模型管理 API \\(POST/DELETE /providers/{id}/models\\)\n- 增强 Codex 事件处理,支持 agent_message 和 mcp_tool_call_end 事件\n- 改进 Codex provider key 管理,支持动态刷新\n- 前端新增 BashToolContent 和 GlobToolContent 组件\n- 优化工具调用展示和解析逻辑\n- 更新 .gitignore 排除 IDE 配置文件\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push:*)"
+    ]
+  }
+}

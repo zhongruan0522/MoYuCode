@@ -10,7 +10,7 @@ export type WorkspaceFileRef = {
 }
 
 export const CHAT_PROMPT_XML = {
-  contextTag: 'onecode_context',
+  contextTag: 'myyucode_context',
   activeFileTag: 'active_file',
   fileTag: 'file',
   selectionTag: 'selection',

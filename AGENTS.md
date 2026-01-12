@@ -1,20 +1,20 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/OneCode/`: ASP.NET Core Web API (`net10.0`) with EF Core (SQLite).
+- `src/MyYuCode/`: ASP.NET Core Web API (`net10.0`) with EF Core (SQLite).
   - `Api/`: minimal API endpoint mappings (see `ApiEndpoints.cs`).
   - `Controllers/`: REST controllers.
-  - `Data/`: `OneCodeDbContext` and entity models.
+  - `Data/`: `MyYuCodeDbContext` and entity models.
   - `Contracts/` and `Services/`: shared DTOs and business logic.
 - `web/`: Vite + React + TypeScript UI.
   - `web/src/`: app code; the `@/` alias maps here.
   - `web/public/`: static assets; build output in `web/dist/`.
-- `OneCode.slnx`: solution referencing the backend project.
+- `MyYuCode.slnx`: solution referencing the backend project.
 
 ## Build, Test, and Development Commands
 Backend:
-- `dotnet build src/OneCode/OneCode.csproj` — compile the API.
-- `dotnet run --project src/OneCode/OneCode.csproj --launch-profile http` — run on `http://localhost:9110` (use `--launch-profile https` for `https://localhost:9111`).
+- `dotnet build src/MyYuCode/MyYuCode.csproj` — compile the API.
+- `dotnet run --project src/MyYuCode/MyYuCode.csproj --launch-profile http` — run on `http://localhost:9110` (use `--launch-profile https` for `https://localhost:9111`).
 
 Frontend (from `web/`):
 - `npm ci` — install dependencies (uses `package-lock.json`).
@@ -35,5 +35,5 @@ Frontend (from `web/`):
 - PRs should include a short summary, testing notes (commands run), and screenshots for UI changes. Avoid committing build artifacts (`bin/`, `obj/`, `web/dist/`, `web/node_modules/`).
 
 ## Configuration & Data
-- The API creates a local SQLite database at `LocalApplicationData/OneCode/onecode.sqlite`; delete it to reset local state.
-- Environment-specific settings live in `src/OneCode/appsettings*.json`.
+- The API creates a local SQLite database at `LocalApplicationData/myyucode/myyucode.sqlite`; delete it to reset local state.
+- Environment-specific settings live in `src/MyYuCode/appsettings*.json`.

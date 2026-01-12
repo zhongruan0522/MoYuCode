@@ -9,8 +9,8 @@ const pwaPlugin = VitePWA({
   registerType: 'autoUpdate',
   includeAssets: ['favicon.ico', 'favicon.png'],
   manifest: {
-    name: 'OneCode',
-    short_name: 'OneCode',
+    name: 'MyYuCode（摸鱼Coding）',
+    short_name: 'MyYuCode',
     description: 'AI-powered coding assistant with Codex and Claude Code integration',
     theme_color: '#000000',
     background_color: '#ffffff',

@@ -25,7 +25,7 @@ function emptyForm(toolType: ToolType): FormState {
   return { toolType, name: '', workspacePath: '', providerId: null, model: '' }
 }
 
-const providerDefaultSentinel = '__onecode_provider_default__'
+const providerDefaultSentinel = '__myyucode_provider_default__'
 const toolTypeLabelByType: Record<ToolType, string> = {
   Codex: 'Codex',
   ClaudeCode: 'Claude Code',
@@ -193,7 +193,7 @@ export function ProjectUpsertModal({
             <Input
               value={form.name}
               onChange={(e) => setForm((s) => ({ ...s, name: e.target.value }))}
-              placeholder="例如：OneCode"
+              placeholder="例如：MyYuCode（摸鱼Coding）"
               disabled={loading}
             />
           </div>

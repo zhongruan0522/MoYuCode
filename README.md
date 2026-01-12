@@ -1,12 +1,12 @@
-# OneCode
+# MyYuCode（摸鱼Coding）
 
 <div align="center">
 
 **Manage Codex and Claude Code with one click - The open-source version of ZCode**
 
-[![CI](https://github.com/AIDotNet/OneCode/workflows/CI/badge.svg)](https://github.com/AIDotNet/OneCode/actions)
-[![Release](https://img.shields.io/github/v/release/AIDotNet/OneCode)](https://github.com/AIDotNet/OneCode/releases)
-[![License](https://img.shields.io/github/license/AIDotNet/OneCode)](LICENSE)
+[![CI](https://github.com/AIDotNet/MyYuCode/workflows/CI/badge.svg)](https://github.com/AIDotNet/MyYuCode/actions)
+[![Release](https://img.shields.io/github/v/release/AIDotNet/MyYuCode)](https://github.com/AIDotNet/MyYuCode/releases)
+[![License](https://img.shields.io/github/license/AIDotNet/MyYuCode)](LICENSE)
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -14,7 +14,7 @@
 
 ## Introduction
 
-OneCode is an open-source tool designed to help users conveniently operate [Codex](https://github.com/openai/codex) and [Claude Code](https://claude.ai/code) through a web interface. It supports local deployment and can be accessed externally through intranet mapping, making it convenient for users to use remotely via mobile devices and other platforms. Part of the design experience is inspired by [ZCode](https://zcode.dev/).
+MyYuCode（摸鱼Coding） is an open-source tool designed to help users conveniently operate [Codex](https://github.com/openai/codex) and [Claude Code](https://claude.ai/code) through a web interface. It supports local deployment and can be accessed externally through intranet mapping, making it convenient for users to use remotely via mobile devices and other platforms. Part of the design experience is inspired by [ZCode](https://zcode.dev/).
 
 ## Features
 
@@ -30,7 +30,7 @@ OneCode is an open-source tool designed to help users conveniently operate [Code
 ## Screenshots
 
 ### System Tray
-After launching OneCode.Win.exe, a system tray icon appears with the background service running automatically.
+After launching MyYuCode.Win.exe, a system tray icon appears with the background service running automatically.
 
 ### Project Selection
 Automatically scans and loads local projects that have used Codex, allowing you to select and enter a workspace.
@@ -47,19 +47,19 @@ Integrated file browser to view and edit code files directly while interacting w
 
 ### Windows Desktop Application
 
-1. Visit the [GitHub Releases](https://github.com/AIDotNet/OneCode/releases) page
-2. Download the latest Windows archive (`OneCode-*-win-x64.zip`)
-3. Extract and run `OneCode.Win.exe`
+1. Visit the [GitHub Releases](https://github.com/AIDotNet/MyYuCode/releases) page
+2. Download the latest Windows archive (`MyYuCode-*-win-x64.zip`)
+3. Extract and run `MyYuCode.Win.exe`
 4. The program will display an icon in the system tray
 5. Open your browser and visit `http://localhost:9110/`
 
 ### Linux
 
-1. Download the latest Linux package (`OneCode-*-linux-x64.tar.gz`) from [Releases](https://github.com/AIDotNet/OneCode/releases)
+1. Download the latest Linux package (`MyYuCode-*-linux-x64.tar.gz`) from [Releases](https://github.com/AIDotNet/MyYuCode/releases)
 2. Extract the archive:
    ```bash
-   tar -xzf OneCode-*-linux-x64.tar.gz
-   cd OneCode-*-linux-x64
+   tar -xzf MyYuCode-*-linux-x64.tar.gz
+   cd MyYuCode-*-linux-x64
    ```
 3. Run directly:
    ```bash
@@ -72,11 +72,11 @@ Integrated file browser to view and edit code files directly while interacting w
 
 ### macOS
 
-1. Download the latest macOS package (`OneCode-*-osx-x64.tar.gz`) from [Releases](https://github.com/AIDotNet/OneCode/releases)
+1. Download the latest macOS package (`MyYuCode-*-osx-x64.tar.gz`) from [Releases](https://github.com/AIDotNet/MyYuCode/releases)
 2. Extract the archive:
    ```bash
-   tar -xzf OneCode-*-osx-x64.tar.gz
-   cd OneCode-*-osx-x64
+   tar -xzf MyYuCode-*-osx-x64.tar.gz
+   cd MyYuCode-*-osx-x64
    ```
 3. Run directly:
    ```bash
@@ -97,7 +97,7 @@ Integrated file browser to view and edit code files directly while interacting w
 
 ## Usage
 
-### Accessing OneCode
+### Accessing MyYuCode（摸鱼Coding）
 
 After starting the application, open your browser and navigate to:
 
@@ -106,7 +106,7 @@ After starting the application, open your browser and navigate to:
 
 ### Project Workflow
 
-1. **Select Project**: OneCode automatically scans for projects with Codex usage history
+1. **Select Project**: MyYuCode（摸鱼Coding） automatically scans for projects with Codex usage history
 2. **Enter Workspace**: Click on a project to enter its workspace
 3. **Start Conversation**: Begin a new chat or load a previous session
 4. **View Code**: Use the integrated file browser to view and edit files
@@ -125,13 +125,13 @@ After starting the application, open your browser and navigate to:
 
 ```bash
 # Build
-dotnet build src/OneCode/OneCode.csproj
+dotnet build src/MyYuCode/MyYuCode.csproj
 
 # Run (HTTP)
-dotnet run --project src/OneCode/OneCode.csproj --launch-profile http
+dotnet run --project src/MyYuCode/MyYuCode.csproj --launch-profile http
 
 # Run (HTTPS)
-dotnet run --project src/OneCode/OneCode.csproj --launch-profile https
+dotnet run --project src/MyYuCode/MyYuCode.csproj --launch-profile https
 ```
 
 ### Frontend (React / Vite)
@@ -164,15 +164,15 @@ npm ci
 npm run build
 
 # Sync frontend to backend wwwroot
-rsync -a --delete web/dist/ src/OneCode/wwwroot/
+rsync -a --delete web/dist/ src/MyYuCode/wwwroot/
 
 # Build backend
-dotnet build src/OneCode/OneCode.csproj -c Release
+dotnet build src/MyYuCode/MyYuCode.csproj -c Release
 ```
 
 ## Architecture
 
-OneCode follows a dual-stack architecture:
+MyYuCode（摸鱼Coding） follows a dual-stack architecture:
 
 ### Backend
 - **Framework**: ASP.NET Core 10.0 Web API
@@ -205,9 +205,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Community
 
-- GitHub: [https://github.com/AIDotNet/OneCode](https://github.com/AIDotNet/OneCode)
-- Issues: [https://github.com/AIDotNet/OneCode/issues](https://github.com/AIDotNet/OneCode/issues)
-- Discussions: [https://github.com/AIDotNet/OneCode/discussions](https://github.com/AIDotNet/OneCode/discussions)
+- GitHub: [https://github.com/AIDotNet/MyYuCode](https://github.com/AIDotNet/MyYuCode)
+- Issues: [https://github.com/AIDotNet/MyYuCode/issues](https://github.com/AIDotNet/MyYuCode/issues)
+- Discussions: [https://github.com/AIDotNet/MyYuCode/discussions](https://github.com/AIDotNet/MyYuCode/discussions)
 
 ## Acknowledgments
 

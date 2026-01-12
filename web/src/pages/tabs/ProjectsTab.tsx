@@ -55,7 +55,7 @@ function emptyBatchForm(): BatchFormState {
   return { updateProvider: false, providerId: null, updateModel: false, model: '' }
 }
 
-const providerDefaultSentinel = '__onecode_provider_default__'
+const providerDefaultSentinel = '__myyucode_provider_default__'
 
 export function ProjectsTab({ toolType }: { toolType: ToolType }) {
   const navigate = useNavigate()
@@ -926,7 +926,7 @@ export function ProjectsTab({ toolType }: { toolType: ToolType }) {
             <Input
               value={form.name}
               onChange={(e) => setForm((s) => ({ ...s, name: e.target.value }))}
-              placeholder="例如：OneCode"
+              placeholder="例如：MyYuCode（摸鱼Coding）"
             />
           </div>
 

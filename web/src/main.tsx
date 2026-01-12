@@ -23,7 +23,7 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
 }
 
-const pwaPromptKey = 'onecode_pwa_install_prompted_v1'
+const pwaPromptKey = 'myyucode_pwa_install_prompted_v1'
 const isStandaloneMode = () =>
   window.matchMedia('(display-mode: standalone)').matches ||
   (window.navigator as { standalone?: boolean }).standalone === true
@@ -108,7 +108,7 @@ function PwaInstallPrompt() {
     <AlertDialog open={open} onOpenChange={setOpen}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>安装 OneCode 应用</AlertDialogTitle>
+          <AlertDialogTitle>安装 MyYuCode（摸鱼Coding） 应用</AlertDialogTitle>
           <AlertDialogDescription>
             推荐安装为 PWA，以获得更流畅的体验和离线访问能力。
           </AlertDialogDescription>

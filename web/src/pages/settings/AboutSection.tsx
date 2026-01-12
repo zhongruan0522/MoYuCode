@@ -69,7 +69,7 @@ export function AboutSection() {
 
   useEffect(() => {
     const controller = new AbortController()
-    fetch('https://api.github.com/repos/AIDotNet/OneCode/releases/latest', {
+    fetch('https://api.github.com/repos/AIDotNet/MyYuCode/releases/latest', {
       signal: controller.signal,
       headers: {
         Accept: 'application/vnd.github+json',
@@ -97,7 +97,7 @@ export function AboutSection() {
   const checkUpdate = () => {
     setChecking(true)
     const controller = new AbortController()
-    fetch('https://api.github.com/repos/AIDotNet/OneCode/releases/latest', {
+    fetch('https://api.github.com/repos/AIDotNet/MyYuCode/releases/latest', {
       signal: controller.signal,
       headers: {
         Accept: 'application/vnd.github+json',
@@ -175,7 +175,7 @@ export function AboutSection() {
     const isLinux = platform.includes('linux')
 
     // 根据文件命名规则查找匹配的 asset
-    // CI 生成的文件: OneCode-{version}-linux-x64.tar.gz, OneCode-{version}-osx-x64.tar.gz, OneCode-{version}-win-x64.zip
+    // CI 生成的文件: MyYuCode-{version}-linux-x64.tar.gz, MyYuCode-{version}-osx-x64.tar.gz, MyYuCode-{version}-win-x64.zip
     const asset = releaseInfo.assets.find((a) => {
       const name = a.name.toLowerCase()
 
@@ -217,7 +217,7 @@ export function AboutSection() {
     if (!downloadUrl) return
 
     // 如果是 releases 页面 URL，则在新标签页打开
-    if (downloadUrl.includes('github.com/AIDotNet/OneCode')) {
+    if (downloadUrl.includes('github.com/AIDotNet/MyYuCode')) {
       window.open(downloadUrl, '_blank')
     } else {
       // 直接下载文件
@@ -238,7 +238,7 @@ export function AboutSection() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h2 className="text-xl font-semibold mb-2">关于 OneCode</h2>
+        <h2 className="text-xl font-semibold mb-2">关于 MyYuCode（摸鱼Coding）</h2>
         <p className="text-sm text-muted-foreground">
           一个强大的 AI 编码助手集成平台
         </p>
@@ -313,12 +313,12 @@ export function AboutSection() {
               <div className="text-sm text-muted-foreground">GitHub 仓库</div>
             </div>
             <a
-              href="https://github.com/AIDotNet/OneCode"
+              href="https://github.com/AIDotNet/MyYuCode"
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-2 text-sm text-primary hover:underline"
             >
-              AIDotNet/OneCode
+              AIDotNet/MyYuCode
               <ExternalLink className="size-4" />
             </a>
           </div>
@@ -328,7 +328,7 @@ export function AboutSection() {
             <div className="font-medium mb-2">项目简介</div>
             <div className="text-sm text-muted-foreground space-y-2">
               <p>
-                OneCode 是一个双栈应用程序，为 AI 编码助手（Codex 和 Claude Code）提供 Web UI。
+                MyYuCode（摸鱼Coding）是一个双栈应用程序，为 AI 编码助手（Codex 和 Claude Code）提供 Web UI。
                 后端是基于 ASP.NET Core Web API（net10.0）构建的，通过 JSON-RPC over stdio 与 OpenAI Codex 应用服务器集成。
                 前端是使用 Vite + React + TypeScript 构建的 SPA，采用 Tailwind CSS 进行样式设计。
               </p>

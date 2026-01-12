@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { cn } from '@/lib/utils'
 
 const FUN_MESSAGES = [
-  '🚀 OneCode 助你一臂之力！',
+  '🚀 MyYuCode（摸鱼Coding）助你一臂之力！',
   '💡 今天想写点什么代码？',
   '⚡ 让编码变得更高效！',
   '🎯 专注于创造，交给我来处理',
@@ -196,7 +196,7 @@ export function LogoBubble() {
       >
         <img
           src="/favicon.png"
-          alt="OneCode Logo"
+          alt="MyYuCode（摸鱼Coding） Logo"
           className="size-full object-cover"
         />
         {showSparkle && (

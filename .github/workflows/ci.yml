@@ -73,12 +73,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p src/OneCode/wwwroot
-          rsync -a --delete web/dist/ src/OneCode/wwwroot/
+          mkdir -p src/MyYuCode/wwwroot
+          rsync -a --delete web/dist/ src/MyYuCode/wwwroot/
 
       - name: Build backend
         if: github.event_name != 'workflow_dispatch'
-        run: dotnet build src/OneCode/OneCode.csproj -c Release -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }}
+        run: dotnet build src/MyYuCode/MyYuCode.csproj -c Release -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }}
 
       - name: Publish backend
         if: github.event_name == 'workflow_dispatch'
@@ -86,14 +86,14 @@ jobs:
         run: |
           set -euo pipefail
           for RID in linux-x64 osx-x64; do
-            dotnet publish src/OneCode/OneCode.csproj -c Release -r "${RID}" --self-contained false -o "artifacts/publish/${RID}" -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }}
+            dotnet publish src/MyYuCode/MyYuCode.csproj -c Release -r "${RID}" --self-contained false -o "artifacts/publish/${RID}" -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }}
           done
           WIN_PUBLISH_ROOT="artifacts/publish/win-x64"
           rm -rf "${WIN_PUBLISH_ROOT}"
           mkdir -p "${WIN_PUBLISH_ROOT}"
-          dotnet publish src/OneCode.Win/OneCode.Win.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }} -p:DebugType=None -p:DebugSymbols=false -o "${WIN_PUBLISH_ROOT}"
-          if [[ ! -f "${WIN_PUBLISH_ROOT}/OneCode.Win.exe" ]]; then
-            echo "OneCode.Win.exe not found in win-x64 publish output."
+          dotnet publish src/MyYuCode.Win/MyYuCode.Win.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }} -p:DebugType=None -p:DebugSymbols=false -o "${WIN_PUBLISH_ROOT}"
+          if [[ ! -f "${WIN_PUBLISH_ROOT}/MyYuCode.Win.exe" ]]; then
+            echo "MyYuCode.Win.exe not found in win-x64 publish output."
             exit 1
           fi
 
@@ -112,14 +112,14 @@ jobs:
           export DOTNET_ENVIRONMENT=Production
           export ASPNETCORE_URLS="http://0.0.0.0:9110"
 
-          echo "OneCode is running at $ASPNETCORE_URLS"
+          echo "MyYuCode is running at $ASPNETCORE_URLS"
           echo "Open: http://localhost:9110"
 
-          if [[ -f "./OneCode" ]]; then
-            chmod +x "./OneCode"
-            ./OneCode
+          if [[ -f "./MyYuCode" ]]; then
+            chmod +x "./MyYuCode"
+            ./MyYuCode
           else
-            dotnet "./OneCode.dll"
+            dotnet "./MyYuCode.dll"
           fi
           EOF
           chmod +x "artifacts/publish/linux-x64/run.sh"
@@ -128,7 +128,7 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
 
-          SERVICE_NAME="${SERVICE_NAME:-onecode}"
+          SERVICE_NAME="${SERVICE_NAME:-myyucode}"
           URLS="${URLS:-http://0.0.0.0:9110}"
           INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -137,17 +137,17 @@ jobs:
             exit 1
           fi
 
-          if [[ -x "$INSTALL_DIR/OneCode" ]]; then
-            EXECUTABLE="$INSTALL_DIR/OneCode"
-          elif [[ -f "$INSTALL_DIR/OneCode.dll" ]]; then
+          if [[ -x "$INSTALL_DIR/MyYuCode" ]]; then
+            EXECUTABLE="$INSTALL_DIR/MyYuCode"
+          elif [[ -f "$INSTALL_DIR/MyYuCode.dll" ]]; then
             DOTNET_PATH="$(command -v dotnet || true)"
             if [[ -z "$DOTNET_PATH" ]]; then
               echo "dotnet not found in PATH." >&2
               exit 1
             fi
-            EXECUTABLE="$DOTNET_PATH $INSTALL_DIR/OneCode.dll"
+            EXECUTABLE="$DOTNET_PATH $INSTALL_DIR/MyYuCode.dll"
           else
-            echo "OneCode executable not found in $INSTALL_DIR" >&2
+            echo "MyYuCode executable not found in $INSTALL_DIR" >&2
             exit 1
           fi
 
@@ -155,7 +155,7 @@ jobs:
 
           cat > "$SERVICE_PATH" <<SERVICE_EOF
           [Unit]
-          Description=OneCode service
+          Description=MyYuCode service
           After=network.target
 
           [Service]
@@ -187,14 +187,14 @@ jobs:
           export DOTNET_ENVIRONMENT=Production
           export ASPNETCORE_URLS="http://0.0.0.0:9110"
 
-          echo "OneCode is running at $ASPNETCORE_URLS"
+          echo "MyYuCode is running at $ASPNETCORE_URLS"
           echo "Open: http://localhost:9110"
 
-          if [[ -f "./OneCode" ]]; then
-            chmod +x "./OneCode"
-            ./OneCode
+          if [[ -f "./MyYuCode" ]]; then
+            chmod +x "./MyYuCode"
+            ./MyYuCode
           else
-            dotnet "./OneCode.dll"
+            dotnet "./MyYuCode.dll"
           fi
           EOF
           chmod +x "artifacts/publish/osx-x64/run.sh"
@@ -203,7 +203,7 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
 
-          SERVICE_NAME="${SERVICE_NAME:-com.onecode.service}"
+          SERVICE_NAME="${SERVICE_NAME:-com.myyucode.service}"
           URLS="${URLS:-http://0.0.0.0:9110}"
           INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -212,12 +212,12 @@ jobs:
             exit 1
           fi
 
-          if [[ -x "$INSTALL_DIR/OneCode" ]]; then
-            program_args=("$INSTALL_DIR/OneCode" "--urls" "$URLS")
+          if [[ -x "$INSTALL_DIR/MyYuCode" ]]; then
+            program_args=("$INSTALL_DIR/MyYuCode" "--urls" "$URLS")
           else
-            dll="$INSTALL_DIR/OneCode.dll"
+            dll="$INSTALL_DIR/MyYuCode.dll"
             if [[ ! -f "$dll" ]]; then
-              echo "OneCode executable not found in $INSTALL_DIR" >&2
+              echo "MyYuCode executable not found in $INSTALL_DIR" >&2
               exit 1
             fi
             dotnet_path="$(command -v dotnet || true)"
@@ -265,9 +265,9 @@ jobs:
             echo '  <key>KeepAlive</key>'
             echo '  <true/>'
             echo '  <key>StandardOutPath</key>'
-            echo "  <string>${INSTALL_DIR}/onecode.out.log</string>"
+            echo "  <string>${INSTALL_DIR}/myyucode.out.log</string>"
             echo '  <key>StandardErrorPath</key>'
-            echo "  <string>${INSTALL_DIR}/onecode.err.log</string>"
+            echo "  <string>${INSTALL_DIR}/myyucode.err.log</string>"
             echo '</dict>'
             echo '</plist>'
           } > "$plist_path"
@@ -288,9 +288,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          tar -czf "artifacts/OneCode-${{ steps.version.outputs.version }}-linux-x64.tar.gz" -C artifacts/publish/linux-x64 .
-          tar -czf "artifacts/OneCode-${{ steps.version.outputs.version }}-osx-x64.tar.gz" -C artifacts/publish/osx-x64 .
-          (cd artifacts/publish/win-x64 && zip -r "../../OneCode-${{ steps.version.outputs.version }}-win-x64.zip" .)
+          tar -czf "artifacts/MyYuCode-${{ steps.version.outputs.version }}-linux-x64.tar.gz" -C artifacts/publish/linux-x64 .
+          tar -czf "artifacts/MyYuCode-${{ steps.version.outputs.version }}-osx-x64.tar.gz" -C artifacts/publish/osx-x64 .
+          (cd artifacts/publish/win-x64 && zip -r "../../MyYuCode-${{ steps.version.outputs.version }}-win-x64.zip" .)
 
       - name: Create release
         if: github.event_name == 'workflow_dispatch'
@@ -302,8 +302,8 @@ jobs:
           set -euo pipefail
           TAG="v${{ steps.version.outputs.version }}"
           ASSETS=(
-            "artifacts/OneCode-${{ steps.version.outputs.version }}-linux-x64.tar.gz"
-            "artifacts/OneCode-${{ steps.version.outputs.version }}-osx-x64.tar.gz"
-            "artifacts/OneCode-${{ steps.version.outputs.version }}-win-x64.zip"
+            "artifacts/MyYuCode-${{ steps.version.outputs.version }}-linux-x64.tar.gz"
+            "artifacts/MyYuCode-${{ steps.version.outputs.version }}-osx-x64.tar.gz"
+            "artifacts/MyYuCode-${{ steps.version.outputs.version }}-win-x64.zip"
           )
           gh release create "${TAG}" "${ASSETS[@]}" --title "${TAG}" --notes "${RELEASE_NOTES}" --target "${GITHUB_SHA}"
