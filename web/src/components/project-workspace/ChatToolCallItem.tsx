@@ -151,28 +151,6 @@ export const ChatToolCallItem = memo(function ChatToolCallItem({
     return normalizeReadToolOutputForMonaco(extracted ?? output)
   }, [output, inputData.readInput])
 
-  const [planContent, setPlanContent] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!inputData.exitPlanModeInput?.filePath) {
-      setPlanContent(null)
-      return
-    }
-    const filePath = inputData.exitPlanModeInput.filePath
-    fetch(`/api/filesystem/read?path=${encodeURIComponent(filePath)}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.data?.content) {
-          setPlanContent(data.data.content)
-        } else if (typeof data.content === 'string') {
-          setPlanContent(data.content)
-        }
-      })
-      .catch(() => {
-        setPlanContent(null)
-      })
-  }, [inputData.exitPlanModeInput?.filePath])
-
   const title = useMemo(() => {
     if (inputData.editInput) {
       return `Edit ${getBaseName(inputData.editInput.filePath)}`
@@ -310,7 +288,6 @@ export const ChatToolCallItem = memo(function ChatToolCallItem({
             isError={isError}
             readCode={readCode}
             editDiff={editDiff}
-            planContent={planContent}
             message={message}
             askUserQuestionDisabled={askUserQuestionDisabled}
             onSubmitAskUserQuestion={onSubmitAskUserQuestion}

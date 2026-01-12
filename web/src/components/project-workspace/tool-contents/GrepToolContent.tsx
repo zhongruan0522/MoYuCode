@@ -29,7 +29,6 @@ export const GrepToolContent = memo(function GrepToolContent({ input, output }: 
 
   const files = parsedOutput?.filenames ?? []
   const numFiles = parsedOutput?.numFiles ?? files.length
-  const mode = parsedOutput?.mode ?? input.outputMode ?? 'files_with_matches'
 
   return (
     <div className="space-y-2">

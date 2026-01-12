@@ -19,7 +19,6 @@ interface ToolItemContentProps {
   isError: boolean
   readCode: string | null
   editDiff: string
-  planContent: string | null
   message: {
     id: string
     toolUseId?: string
@@ -35,7 +34,6 @@ export const ToolItemContent = memo(function ToolItemContent({
   isError,
   readCode,
   editDiff,
-  planContent,
   message,
   askUserQuestionDisabled,
   onSubmitAskUserQuestion,
