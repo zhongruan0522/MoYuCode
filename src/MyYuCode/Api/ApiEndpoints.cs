@@ -7027,7 +7027,7 @@ public static class ApiEndpoints
         skills.MapGet("/installed", () =>
         {
             var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var codexSkillsDir = Path.Combine(userProfile, ".codex", "skills");
+            var codexSkillsDir = Path.Combine(userProfile, ".codex", "skills", ".system");
             var claudeSkillsDir = Path.Combine(userProfile, ".claude", "skills");
 
             var installedSkills = new Dictionary<string, SkillInstalledStatusDto>();
@@ -7142,7 +7142,7 @@ public static class ApiEndpoints
                 var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
                 var targetDir = targetService switch
                 {
-                    "codex" => Path.Combine(userProfile, ".codex", "skills", skill.Slug),
+                    "codex" => Path.Combine(userProfile, ".codex", "skills", ".system", skill.Slug),
                     "claudecode" => Path.Combine(userProfile, ".claude", "skills", skill.Slug),
                     _ => throw new InvalidOperationException("Invalid target service")
                 };

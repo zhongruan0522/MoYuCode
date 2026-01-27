@@ -1,8 +1,8 @@
 ---
 name: plan
-description: A skill that analyzes user requirements, breaks them down into actionable steps, and generates structured documentation. This skill should be used when users want to create detailed implementation plans for software development tasks.
+description: 分析用户需求，分解为可执行步骤，并生成结构化文档。当用户想要为软件开发任务创建详细实施计划时使用此技能。
 metadata:
-  short-description: Create implementation plans
+  short-description: 创建实施计划
 ---
 
 # Plan Skill

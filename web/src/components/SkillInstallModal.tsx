@@ -131,7 +131,7 @@ export function SkillInstallModal({ skill, open, onClose, onInstallComplete }: S
               <div className="flex items-center justify-between">
                 <div>
                   <div className="font-medium">Codex</div>
-                  <div className="text-sm text-muted-foreground">安装到 ~/.codex/skills/</div>
+                  <div className="text-sm text-muted-foreground">安装到 ~/.codex/skills/.system/</div>
                 </div>
                 {canSelectCodex ? (
                   <Badge variant="outline" className="bg-green-500/10 text-green-700 border-green-500/30">

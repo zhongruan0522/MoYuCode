@@ -26,6 +26,306 @@
       "buildId": "20260127.1",
       "status": "active",
       "updatedAt": "2026-01-27T00:00:00Z"
+    },
+    {
+      "slug": "community/api-designer",
+      "name": "API Designer",
+      "summary": "Design and document RESTful APIs with OpenAPI/Swagger specifications following industry best practices.",
+      "description": "Assists in designing well-structured APIs with RESTful principles, OpenAPI 3.0+ specification generation, endpoint naming conventions, request/response schema design, and error handling patterns.",
+      "visibility": "public",
+      "tags": ["api", "rest", "openapi", "swagger", "design", "documentation"],
+      "services": {
+        "codex": { "compatible": true },
+        "claudecode": { "compatible": true }
+      },
+      "skillMd": {
+        "path": "skills/community/api-designer/SKILL.md"
+      },
+      "package": {
+        "basePath": "skills/community/api-designer",
+        "files": [
+          { "path": "SKILL.md", "sha256": "PENDING" }
+        ]
+      },
+      "version": "1.0.0",
+      "buildId": "20260127.1",
+      "status": "active",
+      "updatedAt": "2026-01-27T00:00:00Z"
+    },
+    {
+      "slug": "community/code-review",
+      "name": "Code Review",
+      "summary": "Comprehensive code review with quality analysis, security scanning, and actionable improvement suggestions.",
+      "description": "Performs thorough code reviews focusing on code quality, security vulnerabilities, performance optimization, maintainability improvements, and design pattern recommendations.",
+      "visibility": "public",
+      "tags": ["code-review", "quality", "security", "best-practices", "static-analysis"],
+      "services": {
+        "codex": { "compatible": true },
+        "claudecode": { "compatible": true }
+      },
+      "skillMd": {
+        "path": "skills/community/code-review/SKILL.md"
+      },
+      "package": {
+        "basePath": "skills/community/code-review",
+        "files": [
+          { "path": "SKILL.md", "sha256": "PENDING" }
+        ]
+      },
+      "version": "1.0.0",
+      "buildId": "20260127.1",
+      "status": "active",
+      "updatedAt": "2026-01-27T00:00:00Z"
+    },
+    {
+      "slug": "community/git-workflow",
+      "name": "Git Workflow",
+      "summary": "Automates Git operations with smart commit messages, branch management, and PR description generation.",
+      "description": "Helps developers manage Git repositories efficiently with smart commit message generation, branch management, merge conflict resolution guidance, and PR/MR description generation.",
+      "visibility": "public",
+      "tags": ["git", "version-control", "workflow", "automation", "commits"],
+      "services": {
+        "codex": { "compatible": true },
+        "claudecode": { "compatible": true }
+      },
+      "skillMd": {
+        "path": "skills/community/git-workflow/SKILL.md"
+      },
+      "package": {
+        "basePath": "skills/community/git-workflow",
+        "files": [
+          { "path": "SKILL.md", "sha256": "PENDING" }
+        ]
+      },
+      "version": "1.0.0",
+      "buildId": "20260127.1",
+      "status": "active",
+      "updatedAt": "2026-01-27T00:00:00Z"
+    },
+    {
+      "slug": "community/docker-compose",
+      "name": "Docker Compose",
+      "summary": "Create and manage Docker Compose configurations for multi-container applications.",
+      "description": "Helps with containerization and orchestration including Docker Compose file generation, multi-service architecture design, network and volume configuration, and production-ready configurations.",
+      "visibility": "public",
+      "tags": ["docker", "containers", "devops", "infrastructure", "orchestration"],
+      "services": {
+        "codex": { "compatible": true },
+        "claudecode": { "compatible": true }
+      },
+      "skillMd": {
+        "path": "skills/community/docker-compose/SKILL.md"
+      },
+      "package": {
+        "basePath": "skills/community/docker-compose",
+        "files": [
+          { "path": "SKILL.md", "sha256": "PENDING" }
+        ]
+      },
+      "version": "1.0.0",
+      "buildId": "20260127.1",
+      "status": "active",
+      "updatedAt": "2026-01-27T00:00:00Z"
+    },
+    {
+      "slug": "community/database-designer",
+      "name": "Database Designer",
+      "summary": "Design and optimize database schemas with support for multiple database systems.",
+      "description": "Assists in database design with Entity-Relationship modeling, schema normalization, index optimization strategies, query performance analysis, and migration script generation.",
+      "visibility": "public",
+      "tags": ["database", "sql", "schema", "design", "optimization", "migration"],
+      "services": {
+        "codex": { "compatible": true },
+        "claudecode": { "compatible": true }
+      },
+      "skillMd": {
+        "path": "skills/community/database-designer/SKILL.md"
+      },
+      "package": {
+        "basePath": "skills/community/database-designer",
+        "files": [
+          { "path": "SKILL.md", "sha256": "PENDING" }
+        ]
+      },
+      "version": "1.0.0",
+      "buildId": "20260127.1",
+      "status": "active",
+      "updatedAt": "2026-01-27T00:00:00Z"
+    },
+    {
+      "slug": "community/test-generator",
+      "name": "Test Generator",
+      "summary": "Automatically generate comprehensive test suites with multiple testing frameworks support.",
+      "description": "Generates high-quality tests covering unit tests, integration tests, edge cases, mock generation, and test coverage analysis for multiple languages and frameworks.",
+      "visibility": "public",
+      "tags": ["testing", "unit-tests", "integration-tests", "tdd", "quality-assurance"],
+      "services": {
+        "codex": { "compatible": true },
+        "claudecode": { "compatible": true }
+      },
+      "skillMd": {
+        "path": "skills/community/test-generator/SKILL.md"
+      },
+      "package": {
+        "basePath": "skills/community/test-generator",
+        "files": [
+          { "path": "SKILL.md", "sha256": "PENDING" }
+        ]
+      },
+      "version": "1.0.0",
+      "buildId": "20260127.1",
+      "status": "active",
+      "updatedAt": "2026-01-27T00:00:00Z"
+    },
+    {
+      "slug": "community/documentation-writer",
+      "name": "Documentation Writer",
+      "summary": "Generate comprehensive documentation for code, APIs, and projects.",
+      "description": "Creates high-quality documentation including code comments, API references, README guides, architecture documentation, and changelog generation.",
+      "visibility": "public",
+      "tags": ["documentation", "readme", "api-docs", "comments", "technical-writing"],
+      "services": {
+        "codex": { "compatible": true },
+        "claudecode": { "compatible": true }
+      },
+      "skillMd": {
+        "path": "skills/community/documentation-writer/SKILL.md"
+      },
+      "package": {
+        "basePath": "skills/community/documentation-writer",
+        "files": [
+          { "path": "SKILL.md", "sha256": "PENDING" }
+        ]
+      },
+      "version": "1.0.0",
+      "buildId": "20260127.1",
+      "status": "active",
+      "updatedAt": "2026-01-27T00:00:00Z"
+    },
+    {
+      "slug": "community/refactor-assistant",
+      "name": "Refactor Assistant",
+      "summary": "Intelligent code refactoring with design pattern recommendations and safe transformation strategies.",
+      "description": "Helps improve code quality through systematic refactoring including code smell detection, design pattern suggestions, safe code transformations, and incremental refactoring plans.",
+      "visibility": "public",
+      "tags": ["refactoring", "design-patterns", "code-quality", "clean-code", "architecture"],
+      "services": {
+        "codex": { "compatible": true },
+        "claudecode": { "compatible": true }
+      },
+      "skillMd": {
+        "path": "skills/community/refactor-assistant/SKILL.md"
+      },
+      "package": {
+        "basePath": "skills/community/refactor-assistant",
+        "files": [
+          { "path": "SKILL.md", "sha256": "PENDING" }
+        ]
+      },
+      "version": "1.0.0",
+      "buildId": "20260127.1",
+      "status": "active",
+      "updatedAt": "2026-01-27T00:00:00Z"
+    },
+    {
+      "slug": "community/security-scanner",
+      "name": "Security Scanner",
+      "summary": "Comprehensive security analysis for identifying vulnerabilities and security best practices.",
+      "description": "Performs security-focused code analysis including OWASP Top 10 detection, dependency scanning, secret detection, security configuration review, and compliance checking.",
+      "visibility": "public",
+      "tags": ["security", "vulnerability", "owasp", "scanning", "compliance"],
+      "services": {
+        "codex": { "compatible": true },
+        "claudecode": { "compatible": true }
+      },
+      "skillMd": {
+        "path": "skills/community/security-scanner/SKILL.md"
+      },
+      "package": {
+        "basePath": "skills/community/security-scanner",
+        "files": [
+          { "path": "SKILL.md", "sha256": "PENDING" }
+        ]
+      },
+      "version": "1.0.0",
+      "buildId": "20260127.1",
+      "status": "active",
+      "updatedAt": "2026-01-27T00:00:00Z"
+    },
+    {
+      "slug": "community/ci-cd-generator",
+      "name": "CI/CD Generator",
+      "summary": "Generate continuous integration and deployment pipelines for various platforms.",
+      "description": "Creates CI/CD configurations for GitHub Actions, GitLab CI, Azure DevOps, and Jenkins with build, test, deploy stages, caching optimization, and secret management.",
+      "visibility": "public",
+      "tags": ["ci-cd", "devops", "automation", "github-actions", "deployment"],
+      "services": {
+        "codex": { "compatible": true },
+        "claudecode": { "compatible": true }
+      },
+      "skillMd": {
+        "path": "skills/community/ci-cd-generator/SKILL.md"
+      },
+      "package": {
+        "basePath": "skills/community/ci-cd-generator",
+        "files": [
+          { "path": "SKILL.md", "sha256": "PENDING" }
+        ]
+      },
+      "version": "1.0.0",
+      "buildId": "20260127.1",
+      "status": "active",
+      "updatedAt": "2026-01-27T00:00:00Z"
+    },
+    {
+      "slug": "community/prompt-engineer",
+      "name": "Prompt Engineer",
+      "summary": "Design, optimize, and test prompts for AI models with systematic prompt engineering techniques.",
+      "description": "Helps create effective AI prompts with template design, few-shot examples, chain-of-thought prompting, optimization strategies, and multi-model compatibility.",
+      "visibility": "public",
+      "tags": ["prompts", "ai", "llm", "optimization", "templates"],
+      "services": {
+        "codex": { "compatible": true },
+        "claudecode": { "compatible": true }
+      },
+      "skillMd": {
+        "path": "skills/community/prompt-engineer/SKILL.md"
+      },
+      "package": {
+        "basePath": "skills/community/prompt-engineer",
+        "files": [
+          { "path": "SKILL.md", "sha256": "PENDING" }
+        ]
+      },
+      "version": "1.0.0",
+      "buildId": "20260127.1",
+      "status": "active",
+      "updatedAt": "2026-01-27T00:00:00Z"
+    },
+    {
+      "slug": "community/web-scraper",
+      "name": "Web Scraper",
+      "summary": "Extract and process data from web pages with intelligent parsing capabilities.",
+      "description": "Enables web data extraction with HTML parsing, structured data extraction, content transformation, rate limiting, and format conversion to JSON, CSV, or Markdown.",
+      "visibility": "public",
+      "tags": ["web-scraping", "data-extraction", "parsing", "automation", "html"],
+      "services": {
+        "codex": { "compatible": true },
+        "claudecode": { "compatible": true }
+      },
+      "skillMd": {
+        "path": "skills/community/web-scraper/SKILL.md"
+      },
+      "package": {
+        "basePath": "skills/community/web-scraper",
+        "files": [
+          { "path": "SKILL.md", "sha256": "PENDING" }
+        ]
+      },
+      "version": "1.0.0",
+      "buildId": "20260127.1",
+      "status": "active",
+      "updatedAt": "2026-01-27T00:00:00Z"
     }
   ]
 }
