@@ -9,8 +9,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
-// Parse arguments
-var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
+// Parse arguments (args is already available in top-level statements)
 if (args.Length == 0 || args.Contains("-h") || args.Contains("--help"))
 {
     PrintHelp();
