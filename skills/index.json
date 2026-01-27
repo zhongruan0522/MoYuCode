@@ -345,6 +345,10 @@
         "basePath": "skills/tools/bilibili-analyzer",
         "files": [
           { "path": "SKILL.md", "sha256": "PENDING" },
+          { "path": "references/installation.md", "sha256": "PENDING" },
+          { "path": "references/faq.md", "sha256": "PENDING" },
+          { "path": "examples/basic-usage.md", "sha256": "PENDING" },
+          { "path": "scripts/__init__.py", "sha256": "PENDING" },
           { "path": "scripts/main.py", "sha256": "PENDING" },
           { "path": "scripts/models.py", "sha256": "PENDING" },
           { "path": "scripts/exceptions.py", "sha256": "PENDING" },
