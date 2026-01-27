@@ -13,14 +13,25 @@ from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
 
-from .models import (
-    VideoMetadata,
-    FrameInfo,
-    FrameAnalysis,
-    ReportConfig,
-    VideoReport,
-)
-from .exceptions import ReportGenerationError
+# 支持相对导入和绝对导入
+try:
+    from .models import (
+        VideoMetadata,
+        FrameInfo,
+        FrameAnalysis,
+        ReportConfig,
+        VideoReport,
+    )
+    from .exceptions import ReportGenerationError
+except ImportError:
+    from models import (
+        VideoMetadata,
+        FrameInfo,
+        FrameAnalysis,
+        ReportConfig,
+        VideoReport,
+    )
+    from exceptions import ReportGenerationError
 
 
 class ReportGenerator:

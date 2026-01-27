@@ -24,7 +24,7 @@ import shutil
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pytest
-from hypothesis import given, strategies as st, settings, assume
+from hypothesis import given, strategies as st, settings, assume, HealthCheck
 from typing import List
 import string
 
@@ -132,7 +132,7 @@ def frame_analysis_strategy(draw, frame_id: int = None, timestamp: float = None)
 # Property 7: Task-Frame Bijection
 # ============================================================================
 
-@settings(max_examples=100)
+@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
 @given(frames=frame_info_list_strategy(min_size=1, max_size=50))
 def test_property_7_task_frame_bijection_creation(frames: List[FrameInfo]):
     """

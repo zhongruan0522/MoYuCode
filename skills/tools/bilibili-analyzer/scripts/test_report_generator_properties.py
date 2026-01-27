@@ -714,4 +714,5 @@ def test_save_report_creates_file(metadata: VideoMetadata, frames: List[FrameInf
         assert metadata.title in content, "Report should contain video title"
 
 
-if __name__ 
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

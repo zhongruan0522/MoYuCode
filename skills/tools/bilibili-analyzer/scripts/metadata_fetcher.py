@@ -13,8 +13,13 @@ from datetime import datetime
 
 import requests
 
-from .models import VideoMetadata
-from .exceptions import MetadataFetchError
+# 支持相对导入和绝对导入
+try:
+    from .models import VideoMetadata
+    from .exceptions import MetadataFetchError
+except ImportError:
+    from models import VideoMetadata
+    from exceptions import MetadataFetchError
 
 logger = logging.getLogger(__name__)
 
