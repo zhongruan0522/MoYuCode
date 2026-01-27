@@ -36,15 +36,26 @@ B站视频内容分析工具。提供视频URL后，自动下载视频、拆解�
 
 ## Installation
 
-### 1. 安装 yt-dlp
+### 1. 安装 .NET 10 SDK
+
+脚本使用 .NET 10 单文件执行功能，需要安装 .NET 10 SDK。
+
+下载地址: https://dotnet.microsoft.com/download/dotnet/10.0
+
+验证安装:
+```bash
+dotnet --version
+```
+
+### 2. 安装 yt-dlp
 
 ```bash
 pip install yt-dlp
 ```
 
-详细安装说明: https://github.com/yt-dlp/yt-dlp#installation
+或直接下载可执行文件: https://github.com/yt-dlp/yt-dlp/releases
 
-### 2. 安装 FFmpeg
+### 3. 安装 FFmpeg
 
 **Windows:**
 ```powershell
@@ -85,21 +96,23 @@ ffmpeg -version
 
 ## Provided Script
 
-本 skill 提供了 `scripts/prepare.py` 脚本用于下载视频和提取帧图片。
+本 skill 提供了 `scripts/prepare.cs` 脚本用于下载视频和提取帧图片。
 
-**脚本位置**: `skills/tools/bilibili-analyzer/scripts/prepare.py`
+**脚本位置**: `skills/tools/bilibili-analyzer/scripts/prepare.cs`
+
+**运行方式**: 使用 .NET 10 单文件执行功能
 
 ### 使用方法
 
 ```bash
 # 基本用法
-python scripts/prepare.py "<视频URL>" -o <输出目录>
+dotnet run scripts/prepare.cs "<视频URL>" -o <输出目录>
 
 # 示例
-python scripts/prepare.py "https://www.bilibili.com/video/BV1xx411c7mD" -o ./output
+dotnet run scripts/prepare.cs "https://www.bilibili.com/video/BV1xx411c7mD" -o ./output
 
 # 长视频（降低帧率）
-python scripts/prepare.py "https://www.bilibili.com/video/BV1xx411c7mD" -o ./output --fps 0.5
+dotnet run scripts/prepare.cs "https://www.bilibili.com/video/BV1xx411c7mD" -o ./output --fps 0.5
 ```
 
 ### 参数说明
@@ -133,7 +146,7 @@ python scripts/prepare.py "https://www.bilibili.com/video/BV1xx411c7mD" -o ./out
 使用提供的脚本下载视频并拆解成帧图片：
 
 ```bash
-python skills/tools/bilibili-analyzer/scripts/prepare.py "<视频URL>" -o <输出目录>
+dotnet run skills/tools/bilibili-analyzer/scripts/prepare.cs "<视频URL>" -o <输出目录>
 ```
 
 **注意事项**:
@@ -401,7 +414,7 @@ ffmpeg -i video.mp4 -vf "select='gt(scene,0.3)'" -vsync vfr -q:v 2 images/frame_
 
 ```bash
 # 1. 下载并拆帧
-python scripts/prepare.py "https://www.bilibili.com/video/BV1xx411c7mD" -o ./react-tutorial
+dotnet run scripts/prepare.cs "https://www.bilibili.com/video/BV1xx411c7mD" -o ./react-tutorial
 
 # 2. 分析图片（使用 Task 工具）
 # 3. 生成 react-tutorial/视频分析.md
@@ -411,13 +424,13 @@ python scripts/prepare.py "https://www.bilibili.com/video/BV1xx411c7mD" -o ./rea
 
 ```bash
 # 降低帧率，减少图片数量
-python scripts/prepare.py "https://www.bilibili.com/video/BV1xx411c7mD" -o ./long-video --fps 0.2
+dotnet run scripts/prepare.cs "https://www.bilibili.com/video/BV1xx411c7mD" -o ./long-video --fps 0.2
 ```
 
 ### 示例3: 只下载视频
 
 ```bash
-python scripts/prepare.py "https://www.bilibili.com/video/BV1xx411c7mD" -o ./output --video-only
+dotnet run scripts/prepare.cs "https://www.bilibili.com/video/BV1xx411c7mD" -o ./output --video-only
 ```
 
 ## Quality Checklist

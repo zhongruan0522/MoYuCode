@@ -345,11 +345,11 @@
         "basePath": "skills/tools/bilibili-analyzer",
         "files": [
           { "path": "SKILL.md", "sha256": "PENDING" },
-          { "path": "scripts/prepare.py", "sha256": "PENDING" }
+          { "path": "scripts/prepare.cs", "sha256": "PENDING" }
         ]
       },
-      "version": "3.0.0",
-      "buildId": "20260128.3",
+      "version": "4.0.0",
+      "buildId": "20260128.4",
       "status": "active",
       "updatedAt": "2026-01-28T00:00:00Z"
     }
