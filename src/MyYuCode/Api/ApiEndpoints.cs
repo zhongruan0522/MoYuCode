@@ -10,6 +10,7 @@ using MyYuCode.Contracts.Git;
 using MyYuCode.Contracts.Jobs;
 using MyYuCode.Contracts.Projects;
 using MyYuCode.Contracts.Providers;
+using MyYuCode.Contracts.Skills;
 using MyYuCode.Contracts.Tools;
 using MyYuCode.Data;
 using MyYuCode.Data.Entities;
@@ -31,6 +32,7 @@ public static class ApiEndpoints
         MapGit(api);
         MapProviders(api);
         MapProjects(api);
+        MapSkills(api);
     }
 
     private static void MapGit(RouteGroupBuilder api)
@@ -6966,5 +6968,245 @@ public static class ApiEndpoints
         return value
             .Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("\"", "\\\"", StringComparison.Ordinal);
+    }
+
+    private static void MapSkills(RouteGroupBuilder api)
+    {
+        var skills = api.MapGroup("/skills");
+
+        skills.MapGet("/", async (HttpClient httpClient, CancellationToken cancellationToken) =>
+        {
+            const string skillsUrl = "https://raw.githubusercontent.com/AIDotNet/MoYuCode/refs/heads/main/skills/index.json";
+
+            try
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                cts.CancelAfter(TimeSpan.FromSeconds(10));
+
+                var response = await httpClient.GetAsync(skillsUrl, cts.Token);
+                response.EnsureSuccessStatusCode();
+
+                var json = await response.Content.ReadAsStringAsync(cts.Token);
+                var skillsIndex = JsonSerializer.Deserialize<SkillsIndexDto>(json, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+                if (skillsIndex is null)
+                {
+                    throw new ApiHttpException(StatusCodes.Status502BadGateway, "Skills registry returned invalid data. Please try again later.");
+                }
+
+                // Validate required fields
+                if (skillsIndex.Skills is null)
+                {
+                    throw new ApiHttpException(StatusCodes.Status502BadGateway, "Skills registry data is incomplete. Please try again later.");
+                }
+
+                return skillsIndex;
+            }
+            catch (HttpRequestException)
+            {
+                throw new ApiHttpException(StatusCodes.Status503ServiceUnavailable, "Skills registry is temporarily unavailable. Please try again later.");
+            }
+            catch (TaskCanceledException ex) when (ex.CancellationToken != cancellationToken)
+            {
+                throw new ApiHttpException(StatusCodes.Status503ServiceUnavailable, "Skills registry is temporarily unavailable. Please try again later.");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (JsonException)
+            {
+                throw new ApiHttpException(StatusCodes.Status502BadGateway, "Skills registry returned invalid data. Please try again later.");
+            }
+        });
+
+        // Get installed skills status
+        skills.MapGet("/installed", () =>
+        {
+            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var codexSkillsDir = Path.Combine(userProfile, ".codex", "skills");
+            var claudeSkillsDir = Path.Combine(userProfile, ".claude", "skills");
+
+            var installedSkills = new Dictionary<string, SkillInstalledStatusDto>();
+
+            // Check Codex skills
+            if (Directory.Exists(codexSkillsDir))
+            {
+                foreach (var dir in Directory.GetDirectories(codexSkillsDir, "*", SearchOption.AllDirectories))
+                {
+                    // Check if this directory contains SKILL.md (indicating it's a skill folder)
+                    if (File.Exists(Path.Combine(dir, "SKILL.md")))
+                    {
+                        var relativePath = Path.GetRelativePath(codexSkillsDir, dir).Replace('\\', '/');
+                        if (!installedSkills.TryGetValue(relativePath, out var status))
+                        {
+                            status = new SkillInstalledStatusDto(false, false);
+                        }
+                        installedSkills[relativePath] = status with { Codex = true };
+                    }
+                }
+            }
+
+            // Check Claude skills
+            if (Directory.Exists(claudeSkillsDir))
+            {
+                foreach (var dir in Directory.GetDirectories(claudeSkillsDir, "*", SearchOption.AllDirectories))
+                {
+                    // Check if this directory contains SKILL.md (indicating it's a skill folder)
+                    if (File.Exists(Path.Combine(dir, "SKILL.md")))
+                    {
+                        var relativePath = Path.GetRelativePath(claudeSkillsDir, dir).Replace('\\', '/');
+                        if (!installedSkills.TryGetValue(relativePath, out var status))
+                        {
+                            status = new SkillInstalledStatusDto(false, false);
+                        }
+                        installedSkills[relativePath] = status with { ClaudeCode = true };
+                    }
+                }
+            }
+
+            return installedSkills;
+        });
+
+        skills.MapPost("/install", async (
+            [FromBody] SkillInstallRequest request,
+            HttpClient httpClient,
+            CancellationToken cancellationToken) =>
+        {
+            // Validate request parameters
+            if (string.IsNullOrWhiteSpace(request.Slug))
+            {
+                throw new ApiHttpException(StatusCodes.Status400BadRequest, "Slug is required.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.TargetService))
+            {
+                throw new ApiHttpException(StatusCodes.Status400BadRequest, "Target service is required.");
+            }
+
+            var targetService = request.TargetService.ToLowerInvariant();
+            if (targetService != "codex" && targetService != "claudecode")
+            {
+                throw new ApiHttpException(StatusCodes.Status400BadRequest, "Target service must be 'codex' or 'claudeCode'.");
+            }
+
+            const string skillsUrl = "https://raw.githubusercontent.com/AIDotNet/MoYuCode/refs/heads/main/skills/index.json";
+            const string rawBaseUrl = "https://raw.githubusercontent.com/AIDotNet/MoYuCode/refs/heads/main/";
+
+            try
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                cts.CancelAfter(TimeSpan.FromSeconds(30));
+
+                // Fetch skills index
+                var response = await httpClient.GetAsync(skillsUrl, cts.Token);
+                response.EnsureSuccessStatusCode();
+
+                var json = await response.Content.ReadAsStringAsync(cts.Token);
+                var skillsIndex = JsonSerializer.Deserialize<SkillsIndexDto>(json, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+                if (skillsIndex?.Skills is null)
+                {
+                    throw new ApiHttpException(StatusCodes.Status502BadGateway, "Skills registry returned invalid data.");
+                }
+
+                // Find the skill by slug
+                var skill = skillsIndex.Skills.FirstOrDefault(s =>
+                    string.Equals(s.Slug, request.Slug, StringComparison.OrdinalIgnoreCase));
+
+                if (skill is null)
+                {
+                    throw new ApiHttpException(StatusCodes.Status404NotFound, "Skill not found.");
+                }
+
+                // Check compatibility
+                var isCompatible = targetService switch
+                {
+                    "codex" => skill.Services.Codex.Compatible,
+                    "claudecode" => skill.Services.ClaudeCode.Compatible,
+                    _ => false
+                };
+
+                if (!isCompatible)
+                {
+                    throw new ApiHttpException(StatusCodes.Status400BadRequest, $"Skill is not compatible with {request.TargetService}.");
+                }
+
+                // Determine target directory
+                var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                var targetDir = targetService switch
+                {
+                    "codex" => Path.Combine(userProfile, ".codex", "skills", skill.Slug),
+                    "claudecode" => Path.Combine(userProfile, ".claude", "skills", skill.Slug),
+                    _ => throw new InvalidOperationException("Invalid target service")
+                };
+
+                // Check if already installed and delete old version
+                if (Directory.Exists(targetDir))
+                {
+                    Directory.Delete(targetDir, recursive: true);
+                }
+
+                // Create directory
+                Directory.CreateDirectory(targetDir);
+
+                var installedFiles = new List<string>();
+
+                // Download and save files
+                if (skill.Package?.Files is not null)
+                {
+                    foreach (var file in skill.Package.Files)
+                    {
+                        var fileUrl = $"{rawBaseUrl}{skill.Package.BasePath}/{file.Path}";
+                        var fileResponse = await httpClient.GetAsync(fileUrl, cts.Token);
+                        fileResponse.EnsureSuccessStatusCode();
+
+                        var fileContent = await fileResponse.Content.ReadAsByteArrayAsync(cts.Token);
+                        var filePath = Path.Combine(targetDir, file.Path);
+
+                        // Ensure subdirectory exists
+                        var fileDir = Path.GetDirectoryName(filePath);
+                        if (!string.IsNullOrEmpty(fileDir))
+                        {
+                            Directory.CreateDirectory(fileDir);
+                        }
+
+                        await File.WriteAllBytesAsync(filePath, fileContent, cts.Token);
+                        installedFiles.Add(file.Path);
+                    }
+                }
+
+                return new SkillInstallResponse(
+                    Success: true,
+                    InstalledPath: targetDir,
+                    FilesInstalled: installedFiles);
+            }
+            catch (HttpRequestException)
+            {
+                throw new ApiHttpException(StatusCodes.Status503ServiceUnavailable, "Unable to download skill files. Please try again later.");
+            }
+            catch (TaskCanceledException ex) when (ex.CancellationToken != cancellationToken)
+            {
+                throw new ApiHttpException(StatusCodes.Status503ServiceUnavailable, "Download timed out. Please try again later.");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (IOException ex)
+            {
+                throw new ApiHttpException(StatusCodes.Status500InternalServerError, $"Failed to install skill files: {ex.Message}");
+            }
+            catch (UnauthorizedAccessException)
+            {
+                throw new ApiHttpException(StatusCodes.Status500InternalServerError, "Permission denied. Unable to write to skills directory.");
+            }
+        });
     }
 }

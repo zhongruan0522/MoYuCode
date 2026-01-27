@@ -11,6 +11,8 @@ public sealed class JsonDataStore : IDisposable
     private readonly ConcurrentDictionary<Guid, ProjectEntity> _projects;
     private readonly ConcurrentDictionary<Guid, ProviderEntity> _providers;
     private readonly ConcurrentDictionary<ToolType, ToolSettingsEntity> _toolSettings;
+    private readonly ConcurrentDictionary<Guid, SessionEntity> _sessions;
+    private readonly ConcurrentDictionary<Guid, SessionMessageEntity> _sessionMessages;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private bool _disposed;
 
@@ -29,6 +31,8 @@ public sealed class JsonDataStore : IDisposable
         _projects = new ConcurrentDictionary<Guid, ProjectEntity>();
         _providers = new ConcurrentDictionary<Guid, ProviderEntity>();
         _toolSettings = new ConcurrentDictionary<ToolType, ToolSettingsEntity>();
+        _sessions = new ConcurrentDictionary<Guid, SessionEntity>();
+        _sessionMessages = new ConcurrentDictionary<Guid, SessionMessageEntity>();
 
         // Load data on initialization
         LoadDataAsync().GetAwaiter().GetResult();
@@ -39,6 +43,10 @@ public sealed class JsonDataStore : IDisposable
     public IQueryable<ProviderEntity> Providers => _providers.Values.AsQueryable();
 
     public IQueryable<ToolSettingsEntity> ToolSettings => _toolSettings.Values.AsQueryable();
+
+    public IQueryable<SessionEntity> Sessions => _sessions.Values.AsQueryable();
+
+    public IQueryable<SessionMessageEntity> SessionMessages => _sessionMessages.Values.AsQueryable();
 
     public async Task LoadDataAsync()
     {
@@ -99,6 +107,38 @@ public sealed class JsonDataStore : IDisposable
                     }
                 }
             }
+
+            // Load sessions
+            var sessionsFile = Path.Combine(_dataDirectory, "sessions.json");
+            if (File.Exists(sessionsFile))
+            {
+                var json = await File.ReadAllTextAsync(sessionsFile);
+                var sessionsList = JsonSerializer.Deserialize<List<SessionEntity>>(json, _jsonOptions);
+                if (sessionsList != null)
+                {
+                    _sessions.Clear();
+                    foreach (var session in sessionsList)
+                    {
+                        _sessions[session.Id] = session;
+                    }
+                }
+            }
+
+            // Load session messages
+            var messagesFile = Path.Combine(_dataDirectory, "session-messages.json");
+            if (File.Exists(messagesFile))
+            {
+                var json = await File.ReadAllTextAsync(messagesFile);
+                var messagesList = JsonSerializer.Deserialize<List<SessionMessageEntity>>(json, _jsonOptions);
+                if (messagesList != null)
+                {
+                    _sessionMessages.Clear();
+                    foreach (var message in messagesList)
+                    {
+                        _sessionMessages[message.Id] = message;
+                    }
+                }
+            }
         }
         finally
         {
@@ -128,6 +168,18 @@ public sealed class JsonDataStore : IDisposable
             var toolSettingsList = _toolSettings.Values.OrderBy(s => s.ToolType).ToList();
             var toolSettingsJson = JsonSerializer.Serialize(toolSettingsList, _jsonOptions);
             await File.WriteAllTextAsync(toolSettingsFile, toolSettingsJson);
+
+            // Save sessions
+            var sessionsFile = Path.Combine(_dataDirectory, "sessions.json");
+            var sessionsList = _sessions.Values.OrderByDescending(s => s.UpdatedAtUtc).ToList();
+            var sessionsJson = JsonSerializer.Serialize(sessionsList, _jsonOptions);
+            await File.WriteAllTextAsync(sessionsFile, sessionsJson);
+
+            // Save session messages
+            var messagesFile = Path.Combine(_dataDirectory, "session-messages.json");
+            var messagesList = _sessionMessages.Values.OrderBy(m => m.CreatedAtUtc).ToList();
+            var messagesJson = JsonSerializer.Serialize(messagesList, _jsonOptions);
+            await File.WriteAllTextAsync(messagesFile, messagesJson);
         }
         finally
         {
@@ -193,6 +245,82 @@ public sealed class JsonDataStore : IDisposable
     public bool ProviderExists(Guid id)
     {
         return _providers.ContainsKey(id);
+    }
+
+    // Session methods
+    public void Add(SessionEntity session)
+    {
+        if (session == null) throw new ArgumentNullException(nameof(session));
+        _sessions[session.Id] = session;
+    }
+
+    public void Remove(SessionEntity session)
+    {
+        if (session == null) throw new ArgumentNullException(nameof(session));
+        _sessions.TryRemove(session.Id, out _);
+    }
+
+    public SessionEntity? GetSession(Guid id)
+    {
+        return _sessions.TryGetValue(id, out var session) ? session : null;
+    }
+
+    public List<SessionEntity> GetSessionsByProject(Guid projectId)
+    {
+        return _sessions.Values
+            .Where(s => s.ProjectId == projectId)
+            .OrderByDescending(s => s.UpdatedAtUtc)
+            .ToList();
+    }
+
+    public List<SessionEntity> GetRunningSessions()
+    {
+        return _sessions.Values
+            .Where(s => s.State == SessionState.Running)
+            .OrderByDescending(s => s.UpdatedAtUtc)
+            .ToList();
+    }
+
+    // Session message methods
+    public void Add(SessionMessageEntity message)
+    {
+        if (message == null) throw new ArgumentNullException(nameof(message));
+        _sessionMessages[message.Id] = message;
+
+        // Update session message count
+        if (_sessions.TryGetValue(message.SessionId, out var session))
+        {
+            session.MessageCount = _sessionMessages.Values.Count(m => m.SessionId == message.SessionId);
+            session.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        }
+    }
+
+    public void RemoveSessionMessages(Guid sessionId)
+    {
+        var messagesToRemove = _sessionMessages.Values
+            .Where(m => m.SessionId == sessionId)
+            .Select(m => m.Id)
+            .ToList();
+
+        foreach (var id in messagesToRemove)
+        {
+            _sessionMessages.TryRemove(id, out _);
+        }
+    }
+
+    public List<SessionMessageEntity> GetSessionMessages(Guid sessionId, int skip = 0, int take = 50)
+    {
+        return _sessionMessages.Values
+            .Where(m => m.SessionId == sessionId)
+            .OrderBy(m => m.CreatedAtUtc)
+            .Skip(skip)
+            .Take(take)
+            .ToList();
+    }
+
+    public int GetSessionMessageCount(Guid sessionId)
+    {
+        return _sessionMessages.Values.Count(m => m.SessionId == sessionId);
     }
 
     public void Dispose()

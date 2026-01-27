@@ -14,12 +14,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from '@/components/ui/accordion'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -1025,24 +1019,6 @@ export default function Providers() {
     return models.filter((m) => m.toLowerCase().includes(q))
   }, [modelQuery, models])
 
-  const groupedModels = useMemo(() => {
-    const groups = new Map<string, string[]>()
-    for (const model of filteredModels) {
-      const group = model.includes('/') ? model.split('/')[0] : '模型'
-      const list = groups.get(group) ?? []
-      list.push(model)
-      groups.set(group, list)
-    }
-    return [...groups.entries()]
-      .sort(([a], [b]) => a.localeCompare(b, 'zh-Hans-CN'))
-      .map(([group, list]) => ({
-        group,
-        models: [...new Set(list)].sort((a, b) =>
-          a.localeCompare(b, 'zh-Hans-CN'),
-        ),
-      }))
-  }, [filteredModels])
-
   if (!selectedRef) {
     return (
       <div className="text-sm text-muted-foreground">未找到可用的提供商。</div>
@@ -1198,7 +1174,7 @@ export default function Providers() {
         </div>
       </aside>
 
-      <section className="min-w-0 flex-1 min-h-0 flex flex-col gap-4">
+      <section className="min-w-0 flex-1 min-h-0 flex flex-col gap-4 overflow-y-auto">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -1546,7 +1522,7 @@ export default function Providers() {
 
               {selectedProvider ? (
                 <div className="flex min-h-0 flex-1 flex-col rounded-md border bg-background">
-                  <div className="border-b px-3 py-2 text-xs text-muted-foreground">
+                  <div className="shrink-0 border-b px-3 py-2 text-xs text-muted-foreground">
                     {selectedProvider.models.length
                       ? `已缓存 ${selectedProvider.models.length} 个模型`
                       : '（未拉取）'}
@@ -1557,61 +1533,45 @@ export default function Providers() {
                     ) : null}
                   </div>
                   {selectedProvider.models.length ? (
-                    <div className="min-h-0 flex-1 overflow-y-auto">
-                      <Accordion type="multiple" className="w-full">
-                        {groupedModels.map((g) => (
-                          <AccordionItem key={g.group} value={g.group}>
-                            <AccordionTrigger className="px-3 py-2">
-                              <div className="flex items-center gap-2">
-                                <span className="font-medium">{g.group}</span>
-                                <span className="text-xs text-muted-foreground">
-                                  {g.models.length}
-                                </span>
-                              </div>
-                            </AccordionTrigger>
-                            <AccordionContent className="px-3">
-                              <div className="space-y-1">
-                                {g.models.map((m) => (
-                                  <div
-                                    key={m}
-                                    className="flex items-center justify-between gap-3 rounded-md border bg-card px-3 py-2 text-sm"
-                                  >
-                                    <div className="min-w-0 flex-1 truncate">
-                                      {m}
-                                    </div>
-                                    <div className="flex items-center gap-1">
-                                      <button
-                                        type="button"
-                                        className={cn(
-                                          'inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
-                                          copiedKey === m && 'text-foreground',
-                                        )}
-                                        onClick={() => void copyToClipboard(m, m)}
-                                        title="复制模型名"
-                                      >
-                                        <Copy className="size-3.5" />
-                                        {copiedKey === m ? '已复制' : '复制'}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className={cn(
-                                          'inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-destructive',
-                                        )}
-                                        onClick={() => setRemoveModelTarget(m)}
-                                        title="删除模型"
-                                        disabled={loading}
-                                      >
-                                        <Trash2 className="size-3.5" />
-                                        删除
-                                      </button>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </AccordionContent>
-                          </AccordionItem>
+                    <div className="min-h-0 flex-1 overflow-y-auto p-2">
+                      <div className="space-y-1">
+                        {filteredModels.map((m) => (
+                          <div
+                            key={m}
+                            className="group flex items-center justify-between gap-3 rounded-md border bg-card px-3 py-2 transition-colors hover:bg-accent/50"
+                          >
+                            <span className="min-w-0 flex-1 truncate text-sm">{m}</span>
+                            <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                              <button
+                                type="button"
+                                className={cn(
+                                  'rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground',
+                                  copiedKey === m && 'text-foreground',
+                                )}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  void copyToClipboard(m, m)
+                                }}
+                                title="复制模型名"
+                              >
+                                <Copy className="size-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded p-1 text-muted-foreground hover:bg-background hover:text-destructive"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setRemoveModelTarget(m)
+                                }}
+                                title="删除模型"
+                                disabled={loading}
+                              >
+                                <Trash2 className="size-3.5" />
+                              </button>
+                            </div>
+                          </div>
                         ))}
-                      </Accordion>
+                      </div>
                     </div>
                   ) : (
                     <div className="px-3 py-4 text-sm text-muted-foreground">

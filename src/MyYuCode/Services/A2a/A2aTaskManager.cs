@@ -6,10 +6,13 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using MyYuCode.Data.Entities;
+using MyYuCode.Hubs;
 using MyYuCode.Infrastructure;
 using MyYuCode.Services.Codex;
+using MyYuCode.Services.Sessions;
 
 namespace MyYuCode.Services.A2a;
 
@@ -19,6 +22,9 @@ public sealed class A2aTaskManager
     private readonly IConfiguration _configuration;
     private readonly CodexSessionManager _codexSessionManager;
     private readonly CodexAppServerClient _codexClient;
+    private readonly IHubContext<ChatHub> _hubContext;
+    private readonly SessionManager _sessionManager;
+    private readonly SessionMessageRepository _messageRepository;
 
     private readonly JsonSerializerOptions _jsonOptions = new(JsonOptions.DefaultOptions);
     private readonly ConcurrentDictionary<string, A2aTaskState> _tasks = new(StringComparer.Ordinal);
@@ -32,12 +38,18 @@ public sealed class A2aTaskManager
         ILogger<A2aTaskManager> logger,
         IConfiguration configuration,
         CodexSessionManager codexSessionManager,
-        CodexAppServerClient codexClient)
+        CodexAppServerClient codexClient,
+        IHubContext<ChatHub> hubContext,
+        SessionManager sessionManager,
+        SessionMessageRepository messageRepository)
     {
         _logger = logger;
         _configuration = configuration;
         _codexSessionManager = codexSessionManager;
         _codexClient = codexClient;
+        _hubContext = hubContext;
+        _sessionManager = sessionManager;
+        _messageRepository = messageRepository;
     }
 
     public bool TryGetSnapshot(string taskId, [NotNullWhen(true)] out A2aTaskSnapshot? snapshot)
@@ -220,6 +232,7 @@ public sealed class A2aTaskManager
                 state.ContextId = request.ContextId;
                 state.Cwd = request.Cwd;
                 state.ToolType = request.ToolType;
+                state.SessionId = request.SessionId;
                 state.State = "TASK_STATE_SUBMITTED";
             }
         }
@@ -227,6 +240,12 @@ public sealed class A2aTaskManager
         if (!shouldStart)
         {
             return;
+        }
+
+        // Update session state to RUNNING if session is associated
+        if (request.SessionId.HasValue)
+        {
+            await _sessionManager.UpdateSessionStateAsync(request.SessionId.Value, SessionState.Running);
         }
 
         AppendResult(
@@ -254,11 +273,12 @@ public sealed class A2aTaskManager
             request.ToolType == ToolType.ClaudeCode ? "工具类型：Claude Code" : "工具类型：Codex");
 
         _logger.LogInformation(
-            "A2A task submitted. TaskId={TaskId} ToolType={ToolType} ContextId={ContextId} Cwd={Cwd}",
+            "A2A task submitted. TaskId={TaskId} ToolType={ToolType} ContextId={ContextId} Cwd={Cwd} SessionId={SessionId}",
             request.TaskId,
             request.ToolType,
             request.ContextId,
-            request.Cwd);
+            request.Cwd,
+            request.SessionId);
 
         state.RunningTask = Task.Run(
             () => request.ToolType == ToolType.ClaudeCode
@@ -673,15 +693,51 @@ public sealed class A2aTaskManager
                 prompt = " ";
             }
 
+            // 检查是否存在该 session（通过尝试 resume）
+            // 如果 session 不存在或返回错误，则创建新会话
             var runResult = await RunClaudeOnceAsync(state, request, sessionId, prompt, resume: true);
-            if (runResult.SessionNotFound)
+            
+            // 如果 session 不存在，或者返回了错误（可能是 session 不存在导致的），则创建新会话
+            if (runResult.SessionNotFound || 
+                (!string.IsNullOrWhiteSpace(runResult.FailureMessage) && !runResult.Cancelled))
             {
-                AppendSystemLog(state, request, "未找到会话，创建新会话…");
-                _logger.LogInformation(
-                    "A2A task Claude session not found. TaskId={TaskId} SessionId={SessionId}",
-                    request.TaskId,
-                    sessionId);
-                runResult = await RunClaudeOnceAsync(state, request, sessionId, prompt, resume: false);
+                // 检查是否是因为 session 不存在导致的错误
+                var shouldRetryWithNewSession = runResult.SessionNotFound;
+                
+                // 如果错误信息为空或者是 "任务失败" 这种通用错误，也尝试创建新会话
+                if (!shouldRetryWithNewSession && !string.IsNullOrWhiteSpace(runResult.FailureMessage))
+                {
+                    // 检查是否是第一次对话（没有任何输出就失败了）
+                    string currentAssistantText;
+                    lock (state.Sync)
+                    {
+                        currentAssistantText = state.AssistantText.ToString();
+                    }
+                    
+                    // 如果没有任何助手输出，可能是 session 问题，尝试创建新会话
+                    if (string.IsNullOrWhiteSpace(currentAssistantText))
+                    {
+                        shouldRetryWithNewSession = true;
+                    }
+                }
+                
+                if (shouldRetryWithNewSession)
+                {
+                    // 重置状态以便重试
+                    lock (state.Sync)
+                    {
+                        state.Final = false;
+                        state.AssistantText.Clear();
+                    }
+                    
+                    AppendSystemLog(state, request, "未找到会话或会话无效，创建新会话…");
+                    _logger.LogInformation(
+                        "A2A task Claude session not found or invalid. TaskId={TaskId} SessionId={SessionId} OriginalError={Error}",
+                        request.TaskId,
+                        sessionId,
+                        runResult.FailureMessage);
+                    runResult = await RunClaudeOnceAsync(state, request, sessionId, prompt, resume: false);
+                }
             }
 
             if (runResult.Cancelled || IsCancelRequested(state))
@@ -744,14 +800,27 @@ public sealed class A2aTaskManager
 
         try
         {
+            _logger.LogInformation(
+                "A2A task starting Claude process. TaskId={TaskId} FileName={FileName} Arguments={Arguments} WorkingDirectory={WorkingDirectory}",
+                request.TaskId,
+                startInfo.FileName,
+                string.Join(" ", startInfo.ArgumentList),
+                startInfo.WorkingDirectory);
+
             if (!process.Start())
             {
                 return new ClaudeRunResult(SessionNotFound: false, Cancelled: false,
                     FailureMessage: "Failed to start claude.");
             }
+
+            _logger.LogInformation(
+                "A2A task Claude process started. TaskId={TaskId} ProcessId={ProcessId}",
+                request.TaskId,
+                process.Id);
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
+            _logger.LogError(ex, "A2A task failed to start Claude process. TaskId={TaskId}", request.TaskId);
             return new ClaudeRunResult(SessionNotFound: false, Cancelled: false, FailureMessage: ex.Message);
         }
 
@@ -896,6 +965,13 @@ public sealed class A2aTaskManager
             {
                 // ignore
             }
+
+            _logger.LogInformation(
+                "A2A task Claude process exited. TaskId={TaskId} ExitCode={ExitCode} SawAnyTextDelta={SawAnyTextDelta} IsFinal={IsFinal}",
+                request.TaskId,
+                process.ExitCode,
+                sawAnyTextDelta,
+                IsFinal(state));
 
             if (IsCancelRequested(state))
             {
@@ -1438,6 +1514,12 @@ public sealed class A2aTaskManager
 
             var resultText = TryReadString(root, "result") ?? string.Empty;
 
+            _logger.LogInformation(
+                "A2A task Claude result received. TaskId={TaskId} IsError={IsError} ResultText={ResultText}",
+                request.TaskId,
+                isError,
+                resultText.Length > 500 ? resultText[..500] + "..." : resultText);
+
             if (!string.IsNullOrWhiteSpace(resultText))
             {
                 lock (state.Sync)
@@ -1577,8 +1659,8 @@ public sealed class A2aTaskManager
     }
 
     private static bool LooksLikeClaudeSessionNotFound(string line)
-        => line.StartsWith("No conversation found with session ID:", StringComparison.OrdinalIgnoreCase)
-           || line.StartsWith("No conversation found with session ID", StringComparison.OrdinalIgnoreCase);
+        => line.Contains("[\"No conversation found with session ID", StringComparison.OrdinalIgnoreCase)
+           || line.Contains("[\"No conversation found with session ID", StringComparison.OrdinalIgnoreCase);
 
     private static string NormalizeClaudeSessionId(string contextId)
     {
@@ -1685,19 +1767,10 @@ public sealed class A2aTaskManager
             }
             else
             {
-                var cliJs = TryResolveClaudeCliJsPath();
-                if (!string.IsNullOrWhiteSpace(cliJs))
-                {
-                    startInfo.FileName = "node";
-                    startInfo.ArgumentList.Add(cliJs);
-                }
-                else
-                {
-                    // Fallback: run via `cmd.exe /c` so the `.cmd` shim can be resolved.
-                    startInfo.FileName = "cmd.exe";
-                    startInfo.ArgumentList.Add("/c");
-                    startInfo.ArgumentList.Add("claude");
-                }
+                // Fallback: run via `cmd.exe /c` so the `.cmd` shim can be resolved.
+                startInfo.FileName = "cmd.exe";
+                startInfo.ArgumentList.Add("/c");
+                startInfo.ArgumentList.Add("claude");
             }
         }
         else
@@ -2673,6 +2746,7 @@ public sealed class A2aTaskManager
         string messageText)
     {
         var shouldAppend = false;
+        Guid? sessionId = null;
         lock (state.Sync)
         {
             if (!state.Final)
@@ -2680,6 +2754,7 @@ public sealed class A2aTaskManager
                 state.State = mappedState;
                 state.Final = true;
                 shouldAppend = true;
+                sessionId = state.SessionId;
             }
         }
 
@@ -2719,6 +2794,19 @@ public sealed class A2aTaskManager
                     final: true),
             },
             markFinal: true);
+
+        // Update session state based on task completion
+        if (sessionId.HasValue)
+        {
+            var sessionState = mappedState switch
+            {
+                "TASK_STATE_COMPLETED" => SessionState.Completed,
+                "TASK_STATE_FAILED" => SessionState.Failed,
+                "TASK_STATE_CANCELLED" => SessionState.Cancelled,
+                _ => SessionState.Completed
+            };
+            _ = _sessionManager.UpdateSessionStateAsync(sessionId.Value, sessionState);
+        }
     }
 
     private bool ShouldInterruptAfterStart(A2aTaskState state)
@@ -2858,11 +2946,13 @@ public sealed class A2aTaskManager
         var eventId = Interlocked.Increment(ref _nextEventId);
 
         TaskCompletionSource<bool> toSignal;
+        Guid? sessionId;
         lock (state.Sync)
         {
             state.Events.Add(new A2aStoredEvent(eventId, resultJson));
             toSignal = state.NewEventSignal;
             state.NewEventSignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            sessionId = state.SessionId;
 
             if (markFinal)
             {
@@ -2871,6 +2961,24 @@ public sealed class A2aTaskManager
         }
 
         toSignal.TrySetResult(true);
+
+        // Broadcast via SignalR if session is associated
+        if (sessionId.HasValue)
+        {
+            _ = BroadcastToSessionAsync(sessionId.Value.ToString(), resultObject);
+        }
+    }
+
+    private async Task BroadcastToSessionAsync(string sessionId, object message)
+    {
+        try
+        {
+            await _hubContext.SendMessageToSessionAsync(sessionId, message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to broadcast message to session {SessionId}", sessionId);
+        }
     }
 
     private static object BuildStatusUpdate(
@@ -2969,7 +3077,8 @@ public sealed record A2aTaskStartRequest(
     ProviderRequestType? ProviderRequestType = null,
     string? ProviderAzureApiVersion = null,
     string? ProviderAddress = null,
-    string? ProviderApiKey = null);
+    string? ProviderApiKey = null,
+    Guid? SessionId = null);
 
 public sealed record A2aCodexEvent(DateTimeOffset ReceivedAtUtc, string? Method, string RawJson);
 
@@ -3002,6 +3111,7 @@ internal sealed class A2aTaskState
     public string ContextId { get; set; } = "default";
     public string Cwd { get; set; } = string.Empty;
     public ToolType ToolType { get; set; } = ToolType.Codex;
+    public Guid? SessionId { get; set; }
 
     public bool Started { get; set; }
     public bool Final { get; set; }

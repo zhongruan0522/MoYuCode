@@ -8,7 +8,15 @@ public sealed record SkillDto(
     string Visibility,
     IReadOnlyList<string> Tags,
     SkillServicesDto Services,
+    SkillPackageDto? Package,
     string Version,
     string BuildId,
     string Status,
     string UpdatedAt);
+
+public sealed record SkillPackageDto(
+    string BasePath,
+    IReadOnlyList<SkillPackageFileDto> Files);
+
+public sealed record SkillPackageFileDto(
+    string Path);

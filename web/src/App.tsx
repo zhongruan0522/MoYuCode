@@ -12,6 +12,7 @@ import { NodeInstallPage } from '@/pages/NodeInstallPage'
 import { ToolPage } from '@/pages/ToolPage'
 import Providers from '@/pages/Providers'
 import { SettingsPage } from '@/pages/SettingsPage'
+import { SkillsPage } from '@/pages/SkillsPage'
 import { AboutSection } from '@/pages/settings/AboutSection'
 import { api } from '@/api/client'
 import { Spinner } from '@/components/ui/spinner'
@@ -34,7 +35,7 @@ function PageLoadingFallback() {
   )
 }
 import { ThemeTogglerButton } from '@animate-ui/components-buttons-theme-toggler'
-import { Database, Settings } from 'lucide-react'
+import { Database, Settings, Library } from 'lucide-react'
 import { LogoBubble } from '@/components/LogoBubble'
 
 function MaskIcon({ src, className }: { src: string; className?: string }) {
@@ -110,9 +111,12 @@ function compareVersions(left: string, right: string): number {
 }
 
 export default function App() {
+  const location = useLocation()
   const [appVersion, setAppVersion] = useState<string | null>(null)
   const [latestVersion, setLatestVersion] = useState<string | null>(null)
   const [updateAvailable, setUpdateAvailable] = useState(false)
+  
+  const isProjectWorkspace = location.pathname.startsWith('/projects/')
 
   useEffect(() => {
     let cancelled = false
@@ -178,6 +182,11 @@ export default function App() {
               label="提供商管理"
               icon={<Database className="size-5" aria-hidden="true" />}
             />
+            <NavIconLink
+              to="/skills"
+              label="技能市场"
+              icon={<Library className="size-5" aria-hidden="true" />}
+            />
           </nav>
 
           <div className="mt-auto flex flex-col items-center gap-2">
@@ -205,7 +214,10 @@ export default function App() {
           </div>
         </aside>
 
-        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-6">
+        <main className={cn(
+          "min-h-0 min-w-0 flex-1",
+          isProjectWorkspace ? "overflow-hidden p-0" : "overflow-y-auto px-4 py-6"
+        )}>
           <Routes>
             <Route path="/" element={<Navigate to="/code" replace />} />
             <Route path="/code" element={<CodePage />} />
@@ -223,6 +235,7 @@ export default function App() {
               }
             />
             <Route path="/providers" element={<Providers />} />
+            <Route path="/skills" element={<SkillsPage />} />
             <Route path="/settings" element={<SettingsPage />}>
               <Route index element={<AboutSection />} />
               <Route path="about" element={<AboutSection />} />

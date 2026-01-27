@@ -39,5 +39,10 @@ public sealed class ProjectEntity
     public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
 
     public DateTimeOffset? LastStartedAtUtc { get; set; }
+
+    /// <summary>
+    /// 当前活跃会话 ID
+    /// </summary>
+    public Guid? CurrentSessionId { get; set; }
 }
 

@@ -59,7 +59,7 @@ public class SkillsDataModelPropertyTests
         from buildId in NonEmptyStringGen()
         from status in StatusGen()
         from updatedAt in NonEmptyStringGen()
-        select new SkillDto(slug, name, summary, description, visibility, tags, services, version, buildId, status, updatedAt);
+        select new SkillDto(slug, name, summary, description, visibility, tags, services, null, version, buildId, status, updatedAt);
 
     /// <summary>
     /// Generates valid SkillsIndexDto instances.

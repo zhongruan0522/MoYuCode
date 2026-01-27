@@ -40,6 +40,9 @@ import type {
   WriteFileRequest,
   ProjectEnvironmentDto,
   ProjectEnvironmentUpdateRequest,
+  SkillsIndexDto,
+  SkillInstallResponse,
+  SkillsInstalledMap,
 } from '@/api/types'
 
 const API_BASE =''
@@ -99,6 +102,15 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   app: {
     version: () => http<AppVersionDto>(`/api/version`),
+  },
+  skills: {
+    list: () => http<SkillsIndexDto>(`/api/skills`),
+    installed: () => http<SkillsInstalledMap>(`/api/skills/installed`),
+    install: (slug: string, targetService: 'codex' | 'claudeCode') =>
+      http<SkillInstallResponse>(`/api/skills/install`, {
+        method: 'POST',
+        body: JSON.stringify({ slug, targetService }),
+      }),
   },
   tools: {
     status: (tool: ToolKey) => http<ToolStatusDto>(`/api/tools/${tool}/status`),
@@ -280,4 +292,17 @@ export function formatUtc(iso: string | null | undefined): string {
   } catch {
     return iso
   }
+}
+
+
+// Simple API client for hooks
+export const apiClient = {
+  get: <T>(path: string) => http<T>(path),
+  post: <T>(path: string, body?: unknown) =>
+    http<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }),
+  put: <T>(path: string, body?: unknown) =>
+    http<T>(path, { method: 'PUT', body: body ? JSON.stringify(body) : undefined }),
+  patch: <T>(path: string, body?: unknown) =>
+    http<T>(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }),
+  delete: <T>(path: string) => http<T>(path, { method: 'DELETE' }),
 }

@@ -24,7 +24,7 @@ import { MonacoCode, type MonacoCodeSelection } from '@/components/MonacoCode'
 import { TokenUsageBar, TokenUsageDailyChart } from '@/components/CodexSessionViz'
 import { TabStrip, type TabStripItemBase } from '@/components/TabStrip'
 import { ProjectFileManager } from '@/components/project-workspace/ProjectFileManager'
-import { ProjectChat } from '@/components/project-workspace/ProjectChat'
+import { SessionAwareProjectChat } from '@/components/project-workspace/SessionAwareProjectChat'
 import { TerminalSession, type TerminalSessionHandle } from '@/components/terminal-kit'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
@@ -38,7 +38,6 @@ import {
   ArrowLeft,
   FileText,
   Folder,
-  Layers,
   PanelRightOpen,
   Terminal,
   X,
@@ -550,7 +549,7 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
     undefined
 
   // Task 7.3: Track instance count for multi-instance indicator
-  const { instanceCount, projectInstanceCount, hasMultipleProjectInstances } = useInstanceTracking(
+  const { projectInstanceCount, hasMultipleProjectInstances } = useInstanceTracking(
     instanceId,
     id
   )
@@ -1747,343 +1746,553 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
     navigate(listPath)
   }, [getListPagePath, navigate, project?.toolType])
 
-  return (
-    <div className="h-full min-h-0 overflow-hidden flex flex-col">
-      {/* Back navigation header - only shown in standalone mode */}
-      {isStandaloneMode && project && (
-        <header className="shrink-0 border-b bg-gradient-to-r from-card/80 to-card/50 backdrop-blur-sm px-4 py-2.5 shadow-sm">
-          <div className="flex items-center gap-4">
-            {/* Back button */}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="gap-1.5 hover:bg-accent/80 transition-colors"
-              onClick={handleBackToList}
-            >
-              <ArrowLeft className="size-4" />
-              <span className="hidden sm:inline">返回</span>
-            </Button>
+      return (
 
-            {/* Divider */}
-            <div className="h-6 w-px bg-border/60" />
+        <div className="h-full w-full overflow-hidden flex flex-col bg-background font-sans selection:bg-primary/10">
 
-            {/* Project info */}
-            <div className="min-w-0 flex-1 flex items-center gap-4">
-              {/* Project icon and name */}
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                  <Folder className="size-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-sm font-semibold">{project.name}</span>
-                    {/* Tool type badge */}
-                    <span className={cn(
-                      'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium',
-                      project.toolType === 'ClaudeCode'
-                        ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400'
-                        : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                    )}>
-                      {project.toolType === 'ClaudeCode' ? 'Claude' : 'Codex'}
-                    </span>
-                    {/* Instance count indicator */}
-                    {hasMultipleProjectInstances && (
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400 cursor-help">
-                              <Layers className="size-3" />
-                              <span>{projectInstanceCount}</span>
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>此项目在 {projectInstanceCount} 个标签页中打开</p>
-                            <p className="text-xs text-muted-foreground">共 {instanceCount} 个工作区实例</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    )}
-                  </div>
-                  <div
-                    className="mt-0.5 truncate text-[11px] text-muted-foreground/80 max-w-[300px] sm:max-w-[400px] lg:max-w-[500px]"
-                    title={project.workspacePath}
-                  >
-                    {project.workspacePath}
-                  </div>
-                </div>
-              </div>
-            </div>
+          {/* ChatGPT-style Global Header */}
 
-            {/* Right actions */}
-            <div className="flex items-center gap-2">
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 transition-all hover:shadow-sm"
-                      onClick={() => handleRightPanelOpenChange(!rightPanelOpen)}
-                    >
-                      <PanelRightOpen className={cn(
-                        'size-4 transition-transform duration-200',
-                        rightPanelOpen ? 'rotate-180' : ''
-                      )} />
-                      <span className="hidden md:inline text-xs">
-                        {rightPanelOpen ? '收起' : '展开'}
-                      </span>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {rightPanelOpen ? '收起工作区面板' : '展开工作区面板'}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            </div>
-          </div>
-        </header>
-      )}
+        {isStandaloneMode && project && (
 
-      {error && !projectNotFound ? (
-        <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 p-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex-1">
-              <div className="text-sm font-medium text-destructive">加载项目失败</div>
-              <div className="mt-1 text-sm text-destructive/90">{error}</div>
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => void load()}
-            >
-              重试
-            </Button>
-          </div>
-        </div>
-      ) : null}
-      
-      {!id && !projectId ? (
-        <div className="flex h-full items-center justify-center">
-          <div className="text-center">
-            <div className="text-sm font-medium">未提供项目 ID</div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              请从项目列表中选择一个项目
-            </div>
-          </div>
-        </div>
-      ) : null}
-      
-      {id && projectNotFound && projectId ? (
-        <div className="flex h-full items-center justify-center">
-          <div className="text-center max-w-md">
-            <div className="text-sm font-medium text-destructive">项目未找到</div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              项目 ID: {id}
-            </div>
-            <div className="mt-2 text-xs text-muted-foreground">
-              该项目可能已被删除或您没有访问权限
-            </div>
-            <div className="mt-4">
+          <header className="shrink-0 h-14 flex items-center justify-between px-4 z-30 bg-background/80 backdrop-blur-md">
+
+            <div className="flex items-center gap-3">
+
+              {/* Back to Home/List */}
+
               <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => void load()}
-              >
-                重试
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-      
-      <div
-        ref={workspaceContainerRef}
-        className={cn('min-h-0 flex-1 overflow-hidden flex', (leftPanelOpen && rightPanelOpen) ? 'gap-0' : '')}
-      >
-        {/* 左侧聊天面板 */}
-        {leftPanelOpen && project && (
-          <>
-            <section
-              className={cn(
-                'min-h-0 overflow-hidden flex flex-col transition-all duration-300 ease-in-out',
-                rightPanelOpen ? 'shrink-0' : 'flex-1',
-              )}
-              style={rightPanelOpen ? { width: `${leftPanelWidth * 100}%` } : undefined}
-            >
-              <div style={{
-                height:'100%'
-              }} className="min-h-0 flex-1 overflow-hidden">
-                <ProjectChat
-                  key={effectiveSessionId ?? 'new'}
-                  project={project}
-                  detailsOpen={detailsOpen}
-                  detailsPortalTarget={detailsPortalTarget}
-                  activeFilePath={activeView.kind === 'file' ? activeView.path : null}
-                  codeSelection={codeSelection}
-                  onClearCodeSelection={() => setCodeSelection(null)}
-                  currentToolType={currentToolType}
-                  sessionId={effectiveSessionId}
-                />
-              </div>
-            </section>
 
-            {/* 可拖拽的分隔线 - 仅在两个面板都打开时显示 */}
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              className={cn(
-                'w-1 shrink-0 cursor-col-resize bg-border/30 hover:bg-border/60 transition-opacity duration-300 ease-in-out',
-                resizingPanels ? 'bg-border' : '',
-                !rightPanelOpen ? 'opacity-0 pointer-events-none' : 'opacity-100',
-              )}
-              onPointerDown={startPanelsResize}
-              onPointerMove={movePanelsResize}
-              onPointerUp={stopPanelsResize}
-              onPointerCancel={stopPanelsResize}
-            />
-          </>
+                type="button"
+
+                variant="ghost"
+
+                size="icon-sm"
+
+                className="text-muted-foreground hover:text-foreground transition-colors"
+
+                onClick={handleBackToList}
+
+                title="返回项目列表"
+
+              >
+
+                <ArrowLeft className="size-5" />
+
+              </Button>
+
+  
+
+              {/* Selector-like Title */}
+
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-muted/50 transition-all cursor-default group">
+
+                <span className="text-base font-semibold text-foreground/90 tracking-tight">{project.name}</span>
+
+                <div className={cn(
+
+                  "flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-widest",
+
+                  project.toolType === 'ClaudeCode' 
+
+                    ? "bg-orange-500/10 text-orange-600 dark:text-orange-400" 
+
+                    : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+
+                )}>
+
+                  {project.toolType === 'ClaudeCode' ? 'Claude' : 'Codex'}
+
+                </div>
+
+                
+
+                {hasMultipleProjectInstances && (
+
+                  <div className="size-5 flex items-center justify-center rounded-full bg-blue-500/10 text-blue-600 text-[10px] font-black">
+
+                    {projectInstanceCount}
+
+                  </div>
+
+                )}
+
+              </div>
+
+            </div>
+
+  
+
+            <div className="flex items-center gap-2">
+
+              {/* Workspace Toggle (Canvas) */}
+
+              <TooltipProvider>
+
+                <Tooltip>
+
+                  <TooltipTrigger asChild>
+
+                    <Button
+
+                      type="button"
+
+                      variant="ghost"
+
+                      size="sm"
+
+                      className={cn(
+
+                        "h-9 px-3 gap-2 rounded-xl transition-all",
+
+                        rightPanelOpen ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"
+
+                      )}
+
+                      onClick={() => handleRightPanelOpenChange(!rightPanelOpen)}
+
+                    >
+
+                      <PanelRightOpen className={cn(
+
+                        "size-4 transition-transform duration-500",
+
+                        !rightPanelOpen && "rotate-180"
+
+                      )} />
+
+                      <span className="text-xs font-semibold">工作区</span>
+
+                    </Button>
+
+                  </TooltipTrigger>
+
+                  <TooltipContent className="text-xs">
+
+                    {rightPanelOpen ? '收起工作区' : '打开工作区'}
+
+                  </TooltipContent>
+
+                </Tooltip>
+
+              </TooltipProvider>
+
+            </div>
+
+          </header>
+
         )}
 
-        {/* 右侧工作区面板 */}
-        <aside
-          className={cn(
-            'min-w-0 overflow-hidden rounded-lg border bg-card flex flex-col transition-all duration-300 ease-in-out',
-            // 平滑的展开/收起动画
-            rightPanelOpen && project
-              ? 'flex-1 opacity-100'
-              : 'flex-0 opacity-0 w-0 border-0',
-          )}
-        >
-            <div className="flex items-center justify-between gap-2 border-b px-2 py-1.5">
-              <div className="flex items-center gap-1">
-                {!fileManagerOpen ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    title="打开文件管理"
-                    onClick={() => setFileManagerOpen(true)}
-                  >
-                    <Folder className="size-4" />
-                  </Button>
-                ) : null}
+  
 
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  title="终端"
-                  onClick={() => openTerminal({ focus: true })}
-                >
-                  <Terminal className="size-4" />
-                </Button>
+        {error && !projectNotFound ? (
 
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  title="工具输出"
-                  onClick={() => setActiveView({ kind: 'output' })}
-                >
-                  <FileText className="size-4" />
-                </Button>
-              </div>
+          <div className="shrink-0 p-4">
 
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                title="收起工作区面板"
-                onClick={() => handleRightPanelOpenChange(false)}
-              >
-                <X className="size-4" />
-              </Button>
+            <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 flex items-center justify-between gap-4">
+
+              <div className="text-sm text-destructive font-medium">{error}</div>
+
+              <Button variant="outline" size="sm" className="rounded-lg" onClick={() => void load()}>重试</Button>
+
             </div>
 
-            <div ref={workspaceBodyRef} className="min-h-0 flex-1 overflow-hidden flex">
-              {fileManagerOpen ? (
-                <>
-                  <div className="shrink-0 overflow-hidden" style={{ width: fileManagerWidthPx }}>
-                    <ProjectFileManager
-                      workspacePath={workspacePath}
-                      projectId={project?.id ?? null}
-                      onRequestClose={() => setFileManagerOpen(false)}
-                      onOpenFile={openFile}
-                      onOpenDiff={openDiff}
-                      onOpenTerminal={(path) => openTerminal({ path, focus: true })}
-                      className="h-full"
-                    />
-                  </div>
+          </div>
 
-                  <div
-                    role="separator"
-                    aria-orientation="vertical"
-                    className={cn(
-                      'w-1 shrink-0 cursor-col-resize bg-border/30',
-                      'hover:bg-border/60',
-                      resizing ? 'bg-border' : '',
-                    )}
-                    onPointerDown={startResize}
-                    onPointerMove={moveResize}
-                    onPointerUp={stopResize}
-                    onPointerCancel={stopResize}
+        ) : null}
+
+        
+
+        {!id && !projectId ? (
+
+          <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm font-medium">
+
+            未选择项目
+
+          </div>
+
+        ) : null}
+
+        
+
+        {id && projectNotFound && projectId ? (
+
+          <div className="flex-1 flex flex-col items-center justify-center gap-6 text-center p-8">
+
+            <div className="text-muted-foreground font-medium">项目未找到 (ID: {id})</div>
+
+            <Button variant="outline" className="rounded-xl px-6" onClick={() => void load()}>重试</Button>
+
+          </div>
+
+        ) : null}
+
+        
+
+        {/* Main Workspace Area */}
+
+        <div
+
+          ref={workspaceContainerRef}
+
+          className="flex-1 min-h-0 flex relative overflow-hidden"
+
+        >
+
+          {/* Left Side: Chat Interface */}
+
+          {leftPanelOpen && project && (
+
+            <>
+
+              <section
+
+                className={cn(
+
+                  'h-full flex flex-col transition-all duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)]',
+
+                  rightPanelOpen ? 'shrink-0' : 'flex-1',
+
+                )}
+
+                style={rightPanelOpen ? { width: `${leftPanelWidth * 100}%` } : undefined}
+
+              >
+
+                <div className="h-full relative overflow-hidden">
+
+                  <SessionAwareProjectChat
+
+                    key={effectiveSessionId ?? 'new'}
+
+                    project={project}
+
+                    detailsOpen={detailsOpen}
+
+                    detailsPortalTarget={detailsPortalTarget}
+
+                    activeFilePath={activeView.kind === 'file' ? activeView.path : null}
+
+                    codeSelection={codeSelection}
+
+                    onClearCodeSelection={() => setCodeSelection(null)}
+
+                    currentToolType={currentToolType}
+
+                    showSessionPanel={true}
+
                   />
-                </>
-              ) : null}
 
-              <div className="min-w-0 flex-1 overflow-hidden flex flex-col">
-                <div className="shrink-0 border-b px-2 py-1.5">
-                  <div className="flex items-center gap-2">
-                    <TabStrip
-                      className="min-w-0 flex-1"
-                      items={mainTabs}
-                      activeKey={tryGetViewKey(activeView)}
-                      ariaLabel="Workspace tabs"
-                      onActivate={(tab) => {
-                        if (tab.kind === 'file') {
-                          setActiveView({ kind: 'file', path: tab.path })
-                          return
-                        }
-                        if (tab.kind === 'diff') {
-                          setActiveView({ kind: 'diff', file: tab.file, staged: tab.staged })
-                          return
-                        }
-                        if (tab.kind === 'terminal') {
-                          setActiveView({ kind: 'terminal', id: tab.id })
-                          return
-                        }
-                        setActiveView({ kind: 'panel', panelId: tab.panelId })
-                      }}
-                      onClose={(tab) => closeTab(tab)}
-                    />
-                  </div>
                 </div>
 
-                <div className="min-h-0 flex-1 overflow-hidden">{renderMain()}</div>
+              </section>
+
+  
+
+              {/* Clean Resize Handle */}
+
+              {rightPanelOpen && (
+
+                <div
+
+                  role="separator"
+
+                  className={cn(
+
+                    'w-px h-full z-40 cursor-col-resize hover:bg-primary/30 transition-colors',
+
+                    resizingPanels ? 'bg-primary/50' : 'bg-border/30'
+
+                  )}
+
+                  onPointerDown={startPanelsResize}
+
+                  onPointerMove={movePanelsResize}
+
+                  onPointerUp={stopPanelsResize}
+
+                  onPointerCancel={stopPanelsResize}
+
+                />
+
+              )}
+
+            </>
+
+          )}
+
+  
+
+          {/* Right Side: Workspace (Canvas) */}
+
+          <aside
+
+            className={cn(
+
+              'h-full flex flex-col bg-muted/5 transition-all duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)]',
+
+              rightPanelOpen && project
+
+                ? 'flex-1 opacity-100'
+
+                : 'w-0 opacity-0 pointer-events-none translate-x-8',
+
+            )}
+
+          >
+
+            <div className="flex-1 flex flex-col min-w-0 h-full">
+
+              <div className="shrink-0 h-12 flex items-center justify-between px-3 border-b bg-background/50 backdrop-blur-sm">
+
+                <div className="flex items-center gap-1">
+
+                  {!fileManagerOpen && (
+
+                    <Button
+
+                      type="button"
+
+                      variant="ghost"
+
+                      size="icon-sm"
+
+                      className="text-muted-foreground hover:text-foreground"
+
+                      title="文件"
+
+                      onClick={() => setFileManagerOpen(true)}
+
+                    >
+
+                      <Folder className="size-4" />
+
+                    </Button>
+
+                  )}
+
+  
+
+                  <Button
+
+                    type="button"
+
+                    variant="ghost"
+
+                    size="icon-sm"
+
+                    className="text-muted-foreground hover:text-foreground"
+
+                    title="终端"
+
+                    onClick={() => openTerminal({ focus: true })}
+
+                  >
+
+                    <Terminal className="size-4" />
+
+                  </Button>
+
+  
+
+                  <Button
+
+                    type="button"
+
+                    variant="ghost"
+
+                    size="icon-sm"
+
+                    className="text-muted-foreground hover:text-foreground"
+
+                    title="输出"
+
+                    onClick={() => setActiveView({ kind: 'output' })}
+
+                  >
+
+                    <FileText className="size-4" />
+
+                  </Button>
+
+                </div>
+
+  
+
+                <Button
+
+                  type="button"
+
+                  variant="ghost"
+
+                  size="icon-sm"
+
+                  className="text-muted-foreground hover:text-foreground"
+
+                  onClick={() => handleRightPanelOpenChange(false)}
+
+                >
+
+                  <X className="size-4" />
+
+                </Button>
+
               </div>
+
+  
+
+              <div ref={workspaceBodyRef} className="flex-1 min-h-0 flex overflow-hidden">
+
+                {fileManagerOpen && (
+
+                  <>
+
+                    <div className="shrink-0 overflow-hidden" style={{ width: fileManagerWidthPx }}>
+
+                      <ProjectFileManager
+
+                        workspacePath={workspacePath}
+
+                        projectId={project?.id ?? null}
+
+                        onRequestClose={() => setFileManagerOpen(false)}
+
+                        onOpenFile={openFile}
+
+                        onOpenDiff={openDiff}
+
+                        onOpenTerminal={(path) => openTerminal({ path, focus: true })}
+
+                        className="h-full"
+
+                      />
+
+                    </div>
+
+  
+
+                    <div
+
+                      role="separator"
+
+                      className={cn(
+
+                        'w-px cursor-col-resize hover:bg-primary/30 transition-colors',
+
+                        resizing ? 'bg-primary/50' : 'bg-border/30',
+
+                      )}
+
+                      onPointerDown={startResize}
+
+                      onPointerMove={moveResize}
+
+                      onPointerUp={stopResize}
+
+                      onPointerCancel={stopResize}
+
+                    />
+
+                  </>
+
+                )}
+
+  
+
+                <div className="min-w-0 flex-1 flex flex-col overflow-hidden bg-background">
+
+                  <div className="shrink-0 h-10 flex items-center px-2 border-b bg-muted/5">
+
+                    <TabStrip
+
+                      className="flex-1"
+
+                      items={mainTabs}
+
+                      activeKey={tryGetViewKey(activeView)}
+
+                      ariaLabel="Workspace tabs"
+
+                      onActivate={(tab) => {
+
+                        if (tab.kind === 'file') {
+
+                          setActiveView({ kind: 'file', path: tab.path })
+
+                          return
+
+                        }
+
+                        if (tab.kind === 'diff') {
+
+                          setActiveView({ kind: 'diff', file: tab.file, staged: tab.staged })
+
+                          return
+
+                        }
+
+                        if (tab.kind === 'terminal') {
+
+                          setActiveView({ kind: 'terminal', id: tab.id })
+
+                          return
+
+                        }
+
+                        setActiveView({ kind: 'panel', panelId: tab.panelId })
+
+                      }}
+
+                      onClose={(tab) => closeTab(tab)}
+
+                    />
+
+                  </div>
+
+  
+
+                  <div className="flex-1 min-h-0 overflow-hidden">{renderMain()}</div>
+
+                </div>
+
+              </div>
+
             </div>
+
           </aside>
+
+        </div>
+
+  
+
+        {!leftPanelOpen && (
+
+          <Button
+
+            type="button"
+
+            variant="secondary"
+
+            size="icon"
+
+            className="fixed left-6 top-6 z-50 rounded-full shadow-xl animate-in fade-in zoom-in duration-300"
+
+            title="显示聊天"
+
+            onClick={() => setLeftPanelOpen(true)}
+
+          >
+
+            <PanelRightOpen className="size-5" />
+
+          </Button>
+
+        )}
+
       </div>
 
-      {/* 展开左侧按钮 - 当左侧面板收起时显示 */}
-      {!leftPanelOpen && (
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          className="fixed left-4 top-4 z-40 shadow-md"
-          title="展开聊天面板"
-          onClick={() => setLeftPanelOpen(true)}
-        >
-          <PanelRightOpen className="size-4" />
-          <span className="sr-only">展开聊天面板</span>
-        </Button>
-      )}
-    </div>
-  )
-  },
+    )
+
+  }
+
+  ,
 )

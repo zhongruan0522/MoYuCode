@@ -324,3 +324,65 @@ export type GitCommitResponse = {
   hash: string
   subject: string
 }
+
+
+// Skills Marketplace Types
+export type SkillCompatibilityDto = {
+  compatible: boolean
+}
+
+export type SkillServicesDto = {
+  codex: SkillCompatibilityDto
+  claudeCode: SkillCompatibilityDto
+}
+
+export type SkillDto = {
+  slug: string
+  name: string
+  summary: string
+  description: string
+  visibility: string
+  tags: string[]
+  services: SkillServicesDto
+  package?: SkillPackageDto
+  version: string
+  buildId: string
+  status: string
+  updatedAt: string
+}
+
+export type SkillsIndexDto = {
+  version: number
+  generatedAt: string
+  skills: SkillDto[]
+}
+
+
+// Skill Installation Types
+export type SkillInstallRequest = {
+  slug: string
+  targetService: 'codex' | 'claudeCode'
+}
+
+export type SkillInstallResponse = {
+  success: boolean
+  installedPath: string
+  filesInstalled: string[]
+  errorMessage?: string
+}
+
+export type SkillInstalledStatusDto = {
+  codex: boolean
+  claudeCode: boolean
+}
+
+export type SkillsInstalledMap = Record<string, SkillInstalledStatusDto>
+
+export type SkillPackageFileDto = {
+  path: string
+}
+
+export type SkillPackageDto = {
+  basePath: string
+  files: SkillPackageFileDto[]
+}

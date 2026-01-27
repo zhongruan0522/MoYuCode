@@ -150,3 +150,181 @@ html,body{
   height: 100vh;
   overflow:hidden;
 }
+
+/* Chat 透明背景和毛玻璃效果 */
+.chat-container {
+  background: transparent;
+}
+
+.chat-messages-area {
+  background: transparent;
+}
+
+/* ChatGPT 风格输入框 */
+.chat-input-wrapper {
+  background: oklch(0.18 0 0 / 80%);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid oklch(1 0 0 / 8%);
+  border-radius: 1.5rem;
+  box-shadow: 
+    0 0 0 1px oklch(1 0 0 / 5%),
+    0 2px 8px oklch(0 0 0 / 20%),
+    0 8px 24px oklch(0 0 0 / 15%);
+  transition: all 0.2s ease;
+}
+
+.chat-input-wrapper:focus-within {
+  border-color: oklch(1 0 0 / 15%);
+  box-shadow: 
+    0 0 0 1px oklch(1 0 0 / 10%),
+    0 2px 12px oklch(0 0 0 / 25%),
+    0 8px 32px oklch(0 0 0 / 20%);
+}
+
+.chat-input-wrapper:hover:not(:focus-within) {
+  border-color: oklch(1 0 0 / 12%);
+}
+
+.chat-textarea {
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  resize: none;
+}
+
+.chat-textarea:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.chat-textarea::placeholder {
+  color: oklch(0.5 0 0);
+}
+
+/* 发送按钮样式 */
+.chat-send-btn {
+  background: oklch(0.98 0 0);
+  color: oklch(0.15 0 0);
+  border-radius: 0.75rem;
+  padding: 0.5rem 1rem;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+
+.chat-send-btn:hover:not(:disabled) {
+  background: oklch(1 0 0);
+  transform: translateY(-1px);
+}
+
+.chat-send-btn:disabled {
+  background: oklch(0.3 0 0);
+  color: oklch(0.5 0 0);
+  cursor: not-allowed;
+}
+
+/* 底部渐变遮罩 - 更柔和 */
+.chat-composer-overlay {
+  background: linear-gradient(
+    to top,
+    oklch(0.145 0 0 / 95%) 0%,
+    oklch(0.145 0 0 / 80%) 40%,
+    oklch(0.145 0 0 / 40%) 70%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+/* 消息气泡样式优化 */
+.chat-message-user {
+  background: oklch(0.25 0.02 250);
+  border-radius: 1.25rem 1.25rem 0.25rem 1.25rem;
+}
+
+.chat-message-assistant {
+  background: oklch(0.22 0 0);
+  border-radius: 1.25rem 1.25rem 1.25rem 0.25rem;
+}
+
+/* 工具栏按钮 */
+.chat-toolbar-btn {
+  background: transparent;
+  border: 1px solid oklch(1 0 0 / 10%);
+  border-radius: 0.625rem;
+  color: oklch(0.7 0 0);
+  transition: all 0.15s ease;
+}
+
+.chat-toolbar-btn:hover {
+  background: oklch(1 0 0 / 8%);
+  border-color: oklch(1 0 0 / 15%);
+  color: oklch(0.9 0 0);
+}
+
+/* 模型选择器 */
+.chat-model-selector {
+  background: oklch(0.2 0 0 / 60%);
+  border: 1px solid oklch(1 0 0 / 8%);
+  border-radius: 0.625rem;
+  backdrop-filter: blur(8px);
+}
+
+.chat-model-selector:hover {
+  background: oklch(0.22 0 0 / 70%);
+  border-color: oklch(1 0 0 / 12%);
+}
+
+/* 空状态提示 */
+.chat-empty-state {
+  color: oklch(0.5 0 0);
+}
+
+/* 亮色主题适配 */
+:root:not(.dark) .chat-input-wrapper {
+  background: oklch(0.98 0 0 / 85%);
+  border-color: oklch(0 0 0 / 8%);
+  box-shadow: 
+    0 0 0 1px oklch(0 0 0 / 5%),
+    0 2px 8px oklch(0 0 0 / 8%),
+    0 8px 24px oklch(0 0 0 / 6%);
+}
+
+:root:not(.dark) .chat-input-wrapper:focus-within {
+  border-color: oklch(0 0 0 / 15%);
+  box-shadow: 
+    0 0 0 1px oklch(0 0 0 / 8%),
+    0 2px 12px oklch(0 0 0 / 10%),
+    0 8px 32px oklch(0 0 0 / 8%);
+}
+
+:root:not(.dark) .chat-textarea::placeholder {
+  color: oklch(0.55 0 0);
+}
+
+:root:not(.dark) .chat-send-btn {
+  background: oklch(0.2 0 0);
+  color: oklch(0.98 0 0);
+}
+
+:root:not(.dark) .chat-send-btn:hover:not(:disabled) {
+  background: oklch(0.15 0 0);
+}
+
+:root:not(.dark) .chat-composer-overlay {
+  background: linear-gradient(
+    to top,
+    oklch(1 0 0 / 95%) 0%,
+    oklch(1 0 0 / 80%) 40%,
+    oklch(1 0 0 / 40%) 70%,
+    transparent 100%
+  );
+}
+
+:root:not(.dark) .chat-message-user {
+  background: oklch(0.92 0.02 250);
+}
+
+:root:not(.dark) .chat-message-assistant {
+  background: oklch(0.96 0 0);
+}

@@ -1,10 +1,13 @@
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.WebSockets;
 using Microsoft.Extensions.FileProviders;
 using MyYuCode.Api;
 using MyYuCode.Data;
+using MyYuCode.Hubs;
 using MyYuCode.Services.A2a;
 using MyYuCode.Services.Codex;
 using MyYuCode.Services.Jobs;
+using MyYuCode.Services.Sessions;
 using MyYuCode.Services.Shell;
 using Serilog;
 using Serilog.Events;
@@ -56,10 +59,14 @@ public static class MyYuCodeApp
         builder.Services.AddCors(options =>
         {
             options.AddDefaultPolicy(policy =>
-                policy.AllowAnyOrigin()
+                policy.SetIsOriginAllowed(_ => true)
                     .AllowAnyHeader()
-                    .AllowAnyMethod());
+                    .AllowAnyMethod()
+                    .AllowCredentials());
         });
+
+        // Add SignalR
+        builder.Services.AddSignalR();
 
         var appDataRoot = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -77,6 +84,14 @@ public static class MyYuCodeApp
         builder.Services.AddSingleton<A2aTaskManager>();
         builder.Services.AddSingleton<CodexAppServerClient>();
         builder.Services.AddSingleton<CodexSessionManager>();
+
+        // Session management services
+        builder.Services.AddSingleton<SessionManager>();
+        builder.Services.AddSingleton<SessionMessageRepository>();
+        builder.Services.AddWebSockets((o) =>
+        {
+            
+        });
 
         var app = builder.Build();
         try
@@ -144,6 +159,10 @@ public static class MyYuCodeApp
         app.MapMedia();
         app.MapTerminal();
         app.MapInfo();
+        app.MapSessionsEndpoints();
+
+        // Map SignalR hub
+        app.MapHub<ChatHub>("/api/chat");
 
         if (app.Environment.IsDevelopment())
         {
