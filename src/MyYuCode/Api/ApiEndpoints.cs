@@ -7139,11 +7139,13 @@ public static class ApiEndpoints
                 }
 
                 // Determine target directory
+                // Extract skill name from slug (e.g., "tools/bilibili-analyzer" -> "bilibili-analyzer")
+                var skillName = skill.Slug.Contains('/') ? skill.Slug.Split('/').Last() : skill.Slug;
                 var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
                 var targetDir = targetService switch
                 {
-                    "codex" => Path.Combine(userProfile, ".codex", "skills", ".system", skill.Slug),
-                    "claudecode" => Path.Combine(userProfile, ".claude", "skills", skill.Slug),
+                    "codex" => Path.Combine(userProfile, ".codex", "skills", ".system", skillName),
+                    "claudecode" => Path.Combine(userProfile, ".claude", "skills", skillName),
                     _ => throw new InvalidOperationException("Invalid target service")
                 };
 

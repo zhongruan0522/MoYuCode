@@ -183,14 +183,18 @@ export function SkillsPage() {
           className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
           data-testid="skills-grid"
         >
-          {filteredSkills.map((skill) => (
-            <SkillCard 
-              key={skill.slug} 
-              skill={skill} 
-              installedStatus={installedMap[skill.slug]}
-              onInstall={handleInstall} 
-            />
-          ))}
+          {filteredSkills.map((skill) => {
+            // Extract skill name from slug (e.g., "tools/bilibili-analyzer" -> "bilibili-analyzer")
+            const skillName = skill.slug.includes('/') ? skill.slug.split('/').pop()! : skill.slug
+            return (
+              <SkillCard 
+                key={skill.slug} 
+                skill={skill} 
+                installedStatus={installedMap[skillName]}
+                onInstall={handleInstall} 
+              />
+            )
+          })}
         </div>
       ) : (
         <div className="flex h-48 items-center justify-center" data-testid="no-results">

@@ -101,21 +101,38 @@ class DownloadResult:
 @dataclass
 class AnalyzerConfig:
     """分析器配置
-    
+
     Requirements:
     - 6.1: frame_interval 帧提取间隔
     - 6.2: max_frames 最大帧数
     - 6.3: focus_areas 分析焦点
     - 6.4: output_dir 输出目录
     """
-    frame_interval: int = 30           # 帧提取间隔（秒）
-    max_frames: int = 50               # 最大帧数
+    frame_interval: int = 1            # 帧提取间隔（秒），默认1秒
+    max_frames: int = 0                # 最大帧数，0表示不限制
     max_workers: int = 4               # 并行分析数
     output_dir: str = "./bilibili"     # 输出目录
     focus_areas: List[str] = field(default_factory=lambda: ["text", "objects", "faces"])
-    enable_scene_detection: bool = True  # 启用场景检测
+    enable_scene_detection: bool = False  # 启用场景检测（高频模式下默认关闭）
     download_retries: int = 3          # 下载重试次数
     log_level: str = "INFO"            # 日志级别
+
+    # 新增配置项
+    similarity_threshold: float = 0.95  # 相似帧检测阈值
+    enable_audio: bool = True          # 启用音频分析
+    whisper_model: str = "base"        # Whisper 模型大小
+    audio_language: str = "zh"         # 音频语言
+    resume: bool = False               # 是否断点续传
+
+
+@dataclass
+class AudioConfig:
+    """音频处理配置"""
+    enabled: bool = True               # 是否启用音频处理
+    output_format: str = "wav"         # 输出格式
+    sample_rate: int = 16000           # 采样率
+    whisper_model: str = "base"        # Whisper 模型大小
+    language: str = "zh"               # 语言代码
 
 
 @dataclass
