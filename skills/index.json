@@ -1,30 +1,31 @@
 {
   "version": 1,
-  "generatedAt": "2026-01-07",
+  "generatedAt": "2026-01-27",
   "skills": [
     {
-      "slug": "myyucode/hello-skill",
-      "name": "Hello Skill",
-      "summary": "A minimal example skill for MyYuCode.",
+      "slug": "system/plan",
+      "name": "Plan",
+      "summary": "Analyzes requirements and generates structured implementation plans with categorized tasks, dependencies, and actionable steps for software development.",
+      "description": "A comprehensive planning skill that breaks down user requirements into detailed, actionable implementation plans. Creates structured documentation including task lists, design rationales, and progress tracking. Organizes tasks by category (Architecture, Frontend, Backend, Infrastructure, Testing, Security, etc.) with clear dependencies and effort estimates.",
       "visibility": "public",
-      "tags": ["example", "template"],
+      "tags": ["planning", "requirements", "documentation", "task-management", "architecture"],
       "services": {
         "codex": { "compatible": true },
         "claudecode": { "compatible": true }
       },
       "skillMd": {
-        "path": "skills/myyucode/hello-skill/SKILL.md"
+        "path": "skills/system/plan/SKILL.md"
       },
       "package": {
-        "basePath": "skills/myyucode/hello-skill",
+        "basePath": "skills/system/plan",
         "files": [
           { "path": "SKILL.md", "sha256": "c63046d4469ab930f41bda6519ea0c20955b04dd0db262874789ee3acb40064e" }
         ]
       },
       "version": "1.0.0",
-      "buildId": "20260107.1",
+      "buildId": "20260127.1",
       "status": "active",
-      "updatedAt": "2026-01-07T00:00:00Z"
+      "updatedAt": "2026-01-27T00:00:00Z"
     }
   ]
 }

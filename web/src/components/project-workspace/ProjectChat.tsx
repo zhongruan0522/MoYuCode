@@ -2596,10 +2596,22 @@ export function ProjectChat({
     void resubscribe()
 
     return () => {
-      // 组件卸载时不取消请求，让它在后台继续运行
-      // controller.abort()
+      // Task 4.1 & 4.2: Cleanup SSE connection on component unmount
+      // Abort the request to properly close the SSE connection
+      controller.abort()
     }
   }, []) // 只在组件挂载时运行一次
+
+  // Task 4.2: Cleanup all active connections when component unmounts
+  useEffect(() => {
+    return () => {
+      // Abort any active SSE connection when component unmounts
+      if (abortRef.current) {
+        abortRef.current.abort()
+        abortRef.current = null
+      }
+    }
+  }, [])
 
   const modelSelectionStorageKey = useMemo(() => {
     return `myyucode:chat:model-selection:v2:${project.id}`

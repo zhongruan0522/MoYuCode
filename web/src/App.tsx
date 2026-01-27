@@ -1,11 +1,10 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import {
   Link,
   Navigate,
   Route,
   Routes,
   useLocation,
-  useParams,
 } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { CodePage } from '@/pages/CodePage'
@@ -15,6 +14,25 @@ import Providers from '@/pages/Providers'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { AboutSection } from '@/pages/settings/AboutSection'
 import { api } from '@/api/client'
+import { Spinner } from '@/components/ui/spinner'
+import { OfflineIndicator } from '@/components/OfflineIndicator'
+
+// Lazy load ProjectWorkspacePage for better performance with multiple instances
+const ProjectWorkspacePage = lazy(() =>
+  import('@/pages/ProjectWorkspacePage').then((m) => ({ default: m.ProjectWorkspacePage }))
+)
+
+// Loading fallback for lazy-loaded components
+function PageLoadingFallback() {
+  return (
+    <div className="flex h-full items-center justify-center">
+      <div className="flex flex-col items-center gap-3">
+        <Spinner className="size-8" />
+        <span className="text-sm text-muted-foreground">加载中...</span>
+      </div>
+    </div>
+  )
+}
 import { ThemeTogglerButton } from '@animate-ui/components-buttons-theme-toggler'
 import { Database, Settings } from 'lucide-react'
 import { LogoBubble } from '@/components/LogoBubble'
@@ -91,12 +109,6 @@ function compareVersions(left: string, right: string): number {
   return 0
 }
 
-function LegacyProjectRouteRedirect() {
-  const { id } = useParams()
-  if (!id) return <Navigate to="/code" replace />
-  return <Navigate to={`/code?projects=${encodeURIComponent(id)}`} replace />
-}
-
 export default function App() {
   const [appVersion, setAppVersion] = useState<string | null>(null)
   const [latestVersion, setLatestVersion] = useState<string | null>(null)
@@ -144,6 +156,9 @@ export default function App() {
 
   return (
     <div className="h-screen overflow-hidden bg-background text-foreground">
+      {/* Task 7.2: Offline indicator */}
+      <OfflineIndicator />
+
       <div className="flex h-full w-full">
         <aside className="flex w-16 shrink-0 flex-col items-center border-r bg-card px-2 py-4">
           <LogoBubble />
@@ -212,7 +227,15 @@ export default function App() {
               <Route index element={<AboutSection />} />
               <Route path="about" element={<AboutSection />} />
             </Route>
-            <Route path="/projects/:id" element={<LegacyProjectRouteRedirect />} />
+            {/* New direct project workspace route - lazy loaded for multi-instance performance */}
+            <Route
+              path="/projects/:id"
+              element={
+                <Suspense fallback={<PageLoadingFallback />}>
+                  <ProjectWorkspacePage />
+                </Suspense>
+              }
+            />
             <Route path="*" element={<Navigate to="/code" replace />} />
           </Routes>
         </main>

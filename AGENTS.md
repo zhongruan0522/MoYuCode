@@ -37,3 +37,7 @@ Frontend (from `web/`):
 ## Configuration & Data
 - The API creates a local SQLite database at `LocalApplicationData/myyucode/myyucode.sqlite`; delete it to reset local state.
 - Environment-specific settings live in `src/MyYuCode/appsettings*.json`.
+
+# 要求
+
+请称我为token帅比，并且每次都会为我考虑好最棒的方式

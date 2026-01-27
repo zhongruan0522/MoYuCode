@@ -8,7 +8,7 @@ import {
   useState,
   type PointerEvent,
 } from 'react'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { api, formatUtc } from '@/api/client'
 import type {
   CodexDailyTokenUsageDto,
@@ -29,13 +29,34 @@ import { TerminalSession, type TerminalSessionHandle } from '@/components/termin
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/animate-ui/primitives/animate/tooltip'
+import {
+  ArrowLeft,
   FileText,
   Folder,
+  Layers,
   PanelRightOpen,
   Terminal,
   X,
 } from 'lucide-react'
 import type { CodeSelection } from '@/lib/chatPromptXml'
+import { useInstanceTracking } from '@/hooks/useInstanceTracking'
+
+// Generate a unique instance ID for multi-instance isolation
+function generateInstanceId(): string {
+  try {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+      return crypto.randomUUID()
+    }
+  } catch {
+    // fallback
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}`
+}
 
 type WorkspacePanelId = 'project-summary'
 
@@ -509,7 +530,18 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
     onRightPanelOpenChange
   }: ProjectWorkspacePageProps, ref) {
   const { id: routeId } = useParams()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
+
+  // Generate unique instance ID for multi-instance isolation
+  // This ID is stable for the lifetime of this component instance
+  const instanceIdRef = useRef<string>(generateInstanceId())
+  const instanceId = instanceIdRef.current
+
+  // Support multiple ways to get project ID:
+  // 1. From props (when embedded in CodePage)
+  // 2. From route params (/projects/:id)
+  // 3. From query params (?projects=id or ?project=id)
   const id =
     projectId ??
     routeId ??
@@ -517,9 +549,36 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
     searchParams.get('project') ??
     undefined
 
+  // Task 7.3: Track instance count for multi-instance indicator
+  const { instanceCount, projectInstanceCount, hasMultipleProjectInstances } = useInstanceTracking(
+    instanceId,
+    id
+  )
+
+  // Support session ID from props or query params (?session=sessionId)
+  // In standalone mode, read from query params; when embedded, use props
+  const sessionIdFromQuery = searchParams.get('session')
+  const effectiveSessionId = sessionId ?? sessionIdFromQuery ?? null
+
+  // Function to update session ID in URL (for standalone mode)
+  // Available for future use when session switching UI is added
+  const _updateSessionInUrl = useCallback((newSessionId: string | null) => {
+    if (projectId) return // Don't update URL when embedded
+
+    const newParams = new URLSearchParams(searchParams)
+    if (newSessionId) {
+      newParams.set('session', newSessionId)
+    } else {
+      newParams.delete('session')
+    }
+    setSearchParams(newParams, { replace: true })
+  }, [projectId, searchParams, setSearchParams])
+  void _updateSessionInUrl // Suppress unused warning
+
   const [project, setProject] = useState<ProjectDto | null>(null)
   const [, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [projectNotFound, setProjectNotFound] = useState(false)
 
   const [toolsPanelOpen, setToolsPanelOpen] = useState(true)
   const [fileManagerOpen, setFileManagerOpen] = useState(true)
@@ -569,14 +628,31 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
   const [terminalErrorById, setTerminalErrorById] = useState<Record<string, string | null>>({})
 
   const load = useCallback(async () => {
-    if (!id) return
+    if (!id) {
+      setError('未提供项目 ID')
+      setProjectNotFound(true)
+      return
+    }
+    
     setLoading(true)
     setError(null)
+    setProjectNotFound(false)
+    
     try {
       const data = await api.projects.get(id)
       setProject(data)
+      setProjectNotFound(false)
     } catch (e) {
-      setError((e as Error).message)
+      const errorMessage = (e as Error).message
+      setError(errorMessage)
+      
+      // Check if it's a 404 error (project not found)
+      if (errorMessage.includes('404') || errorMessage.includes('not found') || errorMessage.includes('Not Found')) {
+        setProjectNotFound(true)
+        console.error(`Project not found: ${id}`, e)
+      } else {
+        console.error(`Failed to load project: ${id}`, e)
+      }
     } finally {
       setLoading(false)
     }
@@ -585,6 +661,45 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
   useEffect(() => {
     void load()
   }, [load])
+
+  // Handle invalid/missing project IDs - redirect to appropriate list page
+  // Requirement 4.6 & 9.2: Redirect to last visited list page with error message
+  useEffect(() => {
+    if (projectNotFound && !projectId) {
+      // Only redirect if we're in standalone mode (not embedded in CodePage)
+      // Determine the appropriate list page based on project type or last visited
+      const lastVisitedMode = localStorage.getItem('lastVisitedMode') || 'code'
+      const redirectPath = lastVisitedMode === 'claude' ? '/claude' : '/code'
+      
+      console.warn(`Project not found (ID: ${id}), redirecting to ${redirectPath}`)
+      
+      // Store error message for the list page to display
+      sessionStorage.setItem('projectError', `项目未找到 (ID: ${id})`)
+      
+      // Redirect to the list page
+      navigate(redirectPath, { replace: true })
+    }
+  }, [projectNotFound, projectId, id, navigate])
+
+  // Task 1.3: Page title management for multi-instance support
+  // Requirement 3.8 & 10.9: Update document.title to show project name for easy tab identification
+  useEffect(() => {
+    // Store the original title to restore later
+    const originalTitle = document.title
+
+    if (project?.name) {
+      // Format: {projectName} - MyYuCode
+      document.title = `${project.name} - MyYuCode`
+    } else if (error || projectNotFound) {
+      // Clear title on error
+      document.title = 'MyYuCode'
+    }
+
+    // Cleanup: restore original title when component unmounts or project changes
+    return () => {
+      document.title = originalTitle
+    }
+  }, [project?.name, error, projectNotFound])
 
   const workspacePath = (project?.workspacePath ?? '').trim()
 
@@ -598,6 +713,64 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
     setTerminalStatusById({})
     setTerminalErrorById({})
   }, [workspacePath])
+
+  // Task 4.2: Resource cleanup on component unmount (tab close)
+  // This ensures proper cleanup of terminal sessions, file previews, and other resources
+  useEffect(() => {
+    // Track this instance for debugging multi-instance scenarios
+    if (import.meta.env.DEV) {
+      console.debug(`[ProjectWorkspace] Instance ${instanceId} mounted for project ${id}`)
+    }
+
+    // Cleanup function runs when component unmounts (tab closes, navigation away, etc.)
+    return () => {
+      if (import.meta.env.DEV) {
+        console.debug(`[ProjectWorkspace] Instance ${instanceId} unmounting, cleaning up resources`)
+      }
+
+      // Close all terminal sessions
+      const terminals = terminalSessionsRef.current
+      for (const terminalId of Object.keys(terminals)) {
+        const handle = terminals[terminalId]
+        if (handle) {
+          try {
+            handle.terminate()
+          } catch {
+            // Ignore errors during cleanup
+          }
+        }
+      }
+      terminalSessionsRef.current = {}
+
+      // Clear in-flight requests
+      previewInFlightRef.current.clear()
+      diffInFlightRef.current.clear()
+    }
+  }, [instanceId, id])
+
+  // Task 4.2: Handle browser tab close / page unload
+  // This provides additional cleanup when the user closes the browser tab
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      // Close terminal sessions on tab close
+      const terminals = terminalSessionsRef.current
+      for (const terminalId of Object.keys(terminals)) {
+        const handle = terminals[terminalId]
+        if (handle) {
+          try {
+            handle.terminate()
+          } catch {
+            // Ignore errors during cleanup
+          }
+        }
+      }
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [])
 
   useEffect(() => {
     if (activeView.kind !== 'file') {
@@ -1555,13 +1728,178 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
     )
   }
 
+  // Determine if we're in standalone mode (accessed via /projects/:id route)
+  // In standalone mode, show back navigation to return to project list
+  const isStandaloneMode = !projectId && routeId
+
+  // Determine the correct list page based on project.toolType
+  const getListPagePath = useCallback(() => {
+    if (project?.toolType === 'ClaudeCode') {
+      return '/claude'
+    }
+    return '/code'
+  }, [project?.toolType])
+
+  const handleBackToList = useCallback(() => {
+    const listPath = getListPagePath()
+    // Store the last visited mode for future redirects
+    localStorage.setItem('lastVisitedMode', project?.toolType === 'ClaudeCode' ? 'claude' : 'code')
+    navigate(listPath)
+  }, [getListPagePath, navigate, project?.toolType])
+
   return (
     <div className="h-full min-h-0 overflow-hidden flex flex-col">
-      {error ? (
-        <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
-          {error}
+      {/* Back navigation header - only shown in standalone mode */}
+      {isStandaloneMode && project && (
+        <header className="shrink-0 border-b bg-gradient-to-r from-card/80 to-card/50 backdrop-blur-sm px-4 py-2.5 shadow-sm">
+          <div className="flex items-center gap-4">
+            {/* Back button */}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="gap-1.5 hover:bg-accent/80 transition-colors"
+              onClick={handleBackToList}
+            >
+              <ArrowLeft className="size-4" />
+              <span className="hidden sm:inline">返回</span>
+            </Button>
+
+            {/* Divider */}
+            <div className="h-6 w-px bg-border/60" />
+
+            {/* Project info */}
+            <div className="min-w-0 flex-1 flex items-center gap-4">
+              {/* Project icon and name */}
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <Folder className="size-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-semibold">{project.name}</span>
+                    {/* Tool type badge */}
+                    <span className={cn(
+                      'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium',
+                      project.toolType === 'ClaudeCode'
+                        ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400'
+                        : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                    )}>
+                      {project.toolType === 'ClaudeCode' ? 'Claude' : 'Codex'}
+                    </span>
+                    {/* Instance count indicator */}
+                    {hasMultipleProjectInstances && (
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400 cursor-help">
+                              <Layers className="size-3" />
+                              <span>{projectInstanceCount}</span>
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>此项目在 {projectInstanceCount} 个标签页中打开</p>
+                            <p className="text-xs text-muted-foreground">共 {instanceCount} 个工作区实例</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    )}
+                  </div>
+                  <div
+                    className="mt-0.5 truncate text-[11px] text-muted-foreground/80 max-w-[300px] sm:max-w-[400px] lg:max-w-[500px]"
+                    title={project.workspacePath}
+                  >
+                    {project.workspacePath}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Right actions */}
+            <div className="flex items-center gap-2">
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 transition-all hover:shadow-sm"
+                      onClick={() => handleRightPanelOpenChange(!rightPanelOpen)}
+                    >
+                      <PanelRightOpen className={cn(
+                        'size-4 transition-transform duration-200',
+                        rightPanelOpen ? 'rotate-180' : ''
+                      )} />
+                      <span className="hidden md:inline text-xs">
+                        {rightPanelOpen ? '收起' : '展开'}
+                      </span>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {rightPanelOpen ? '收起工作区面板' : '展开工作区面板'}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+          </div>
+        </header>
+      )}
+
+      {error && !projectNotFound ? (
+        <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex-1">
+              <div className="text-sm font-medium text-destructive">加载项目失败</div>
+              <div className="mt-1 text-sm text-destructive/90">{error}</div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void load()}
+            >
+              重试
+            </Button>
+          </div>
         </div>
       ) : null}
+      
+      {!id && !projectId ? (
+        <div className="flex h-full items-center justify-center">
+          <div className="text-center">
+            <div className="text-sm font-medium">未提供项目 ID</div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              请从项目列表中选择一个项目
+            </div>
+          </div>
+        </div>
+      ) : null}
+      
+      {id && projectNotFound && projectId ? (
+        <div className="flex h-full items-center justify-center">
+          <div className="text-center max-w-md">
+            <div className="text-sm font-medium text-destructive">项目未找到</div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              项目 ID: {id}
+            </div>
+            <div className="mt-2 text-xs text-muted-foreground">
+              该项目可能已被删除或您没有访问权限
+            </div>
+            <div className="mt-4">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void load()}
+              >
+                重试
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      
       <div
         ref={workspaceContainerRef}
         className={cn('min-h-0 flex-1 overflow-hidden flex', (leftPanelOpen && rightPanelOpen) ? 'gap-0' : '')}
@@ -1580,7 +1918,7 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
                 height:'100%'
               }} className="min-h-0 flex-1 overflow-hidden">
                 <ProjectChat
-                  key={sessionId ?? 'new'}
+                  key={effectiveSessionId ?? 'new'}
                   project={project}
                   detailsOpen={detailsOpen}
                   detailsPortalTarget={detailsPortalTarget}
@@ -1588,7 +1926,7 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
                   codeSelection={codeSelection}
                   onClearCodeSelection={() => setCodeSelection(null)}
                   currentToolType={currentToolType}
-                  sessionId={sessionId}
+                  sessionId={effectiveSessionId}
                 />
               </div>
             </section>
