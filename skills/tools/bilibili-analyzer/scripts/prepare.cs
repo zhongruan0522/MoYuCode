@@ -1,13 +1,13 @@
 #!/usr/bin/env dotnet run
-#:package CliWrap@3.6.6
 
 using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using CliWrap;
-using CliWrap.Buffered;
 
 // Parse arguments
 var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
@@ -40,7 +40,7 @@ Console.WriteLine(new string('=', 50));
 // Download video
 if (!framesOnly)
 {
-    if (!await DownloadVideoAsync(url, videoPath))
+    if (!await DownloadBilibiliVideoAsync(url, videoPath))
     {
         Environment.Exit(1);
     }
@@ -70,37 +70,94 @@ Console.WriteLine(new string('=', 50));
 
 // === Functions ===
 
-async Task<bool> DownloadVideoAsync(string url, string outputPath)
+async Task<bool> DownloadBilibiliVideoAsync(string url, string outputPath)
 {
     Console.WriteLine($"[INFO] Downloading video: {url}");
 
-    var ytDlp = FindExecutable("yt-dlp", "yt-dlp.exe");
-    if (ytDlp == null)
-    {
-        Console.WriteLine("[ERROR] yt-dlp not found!");
-        Console.WriteLine("        Install with: pip install yt-dlp");
-        Console.WriteLine("        Or download from: https://github.com/yt-dlp/yt-dlp/releases");
-        return false;
-    }
-
     try
     {
-        Console.WriteLine($"[INFO] Running yt-dlp...");
-        var result = await Cli.Wrap(ytDlp)
-            .WithArguments(new[]
-            {
-                "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-                "-o", outputPath,
-                "--no-warnings",
-                url
-            })
-            .WithValidation(CommandResultValidation.None)
-            .ExecuteBufferedAsync();
-
-        if (result.ExitCode != 0)
+        // Extract BV ID from URL
+        var bvid = ExtractBvid(url);
+        if (string.IsNullOrEmpty(bvid))
         {
-            Console.WriteLine($"[ERROR] Download failed: {result.StandardError}");
+            Console.WriteLine("[ERROR] Invalid Bilibili URL, cannot extract BV ID");
             return false;
+        }
+        Console.WriteLine($"[INFO] BV ID: {bvid}");
+
+        using var client = CreateHttpClient();
+
+        // Step 1: Get video info to obtain cid
+        Console.WriteLine("[INFO] Fetching video info...");
+        var infoUrl = $"https://api.bilibili.com/x/web-interface/view?bvid={bvid}";
+        var infoJson = await client.GetStringAsync(infoUrl);
+        using var infoDoc = JsonDocument.Parse(infoJson);
+
+        var code = infoDoc.RootElement.GetProperty("code").GetInt32();
+        if (code != 0)
+        {
+            var message = infoDoc.RootElement.GetProperty("message").GetString();
+            Console.WriteLine($"[ERROR] Failed to get video info: {message}");
+            return false;
+        }
+
+        var data = infoDoc.RootElement.GetProperty("data");
+        var title = data.GetProperty("title").GetString();
+        var cid = data.GetProperty("cid").GetInt64();
+        Console.WriteLine($"[INFO] Title: {title}");
+        Console.WriteLine($"[INFO] CID: {cid}");
+
+        // Step 2: Get playback URL
+        Console.WriteLine("[INFO] Fetching playback URL...");
+        var playUrl = $"https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&qn=80&fnval=1";
+        var playJson = await client.GetStringAsync(playUrl);
+        using var playDoc = JsonDocument.Parse(playJson);
+
+        var playCode = playDoc.RootElement.GetProperty("code").GetInt32();
+        if (playCode != 0)
+        {
+            var message = playDoc.RootElement.GetProperty("message").GetString();
+            Console.WriteLine($"[ERROR] Failed to get playback URL: {message}");
+            return false;
+        }
+
+        var playData = playDoc.RootElement.GetProperty("data");
+        var durl = playData.GetProperty("durl")[0];
+        var videoUrl = durl.GetProperty("url").GetString();
+        var size = durl.GetProperty("size").GetInt64();
+
+        Console.WriteLine($"[INFO] Video size: {size / 1024 / 1024:F1} MB");
+
+        // Step 3: Download video
+        Console.WriteLine("[INFO] Downloading video file...");
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, videoUrl);
+        request.Headers.Add("Referer", $"https://www.bilibili.com/video/{bvid}");
+
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        response.EnsureSuccessStatusCode();
+
+        var totalBytes = response.Content.Headers.ContentLength ?? size;
+
+        await using var contentStream = await response.Content.ReadAsStreamAsync();
+        await using var fileStream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
+
+        var buffer = new byte[8192];
+        var totalRead = 0L;
+        var lastProgress = 0;
+        int bytesRead;
+
+        while ((bytesRead = await contentStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+        {
+            await fileStream.WriteAsync(buffer, 0, bytesRead);
+            totalRead += bytesRead;
+
+            var progress = (int)(totalRead * 100 / totalBytes);
+            if (progress > lastProgress && progress % 10 == 0)
+            {
+                Console.WriteLine($"[INFO] Progress: {progress}%");
+                lastProgress = progress;
+            }
         }
 
         Console.WriteLine($"[OK] Video downloaded: {outputPath}");
@@ -111,6 +168,45 @@ async Task<bool> DownloadVideoAsync(string url, string outputPath)
         Console.WriteLine($"[ERROR] Download failed: {ex.Message}");
         return false;
     }
+}
+
+string? ExtractBvid(string url)
+{
+    // Match BV ID from various URL formats
+    // https://www.bilibili.com/video/BV1xx411c7mD
+    // https://b23.tv/BV1xx411c7mD
+    // BV1xx411c7mD
+    var patterns = new[]
+    {
+        @"BV[a-zA-Z0-9]+",
+    };
+
+    foreach (var pattern in patterns)
+    {
+        var match = Regex.Match(url, pattern);
+        if (match.Success)
+        {
+            return match.Value;
+        }
+    }
+
+    return null;
+}
+
+HttpClient CreateHttpClient()
+{
+    var handler = new HttpClientHandler
+    {
+        AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate
+    };
+
+    var client = new HttpClient(handler);
+    client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    client.DefaultRequestHeaders.Add("Referer", "https://www.bilibili.com");
+    client.DefaultRequestHeaders.Add("Accept", "application/json, text/plain, */*");
+    client.Timeout = TimeSpan.FromMinutes(30);
+
+    return client;
 }
 
 async Task<bool> ExtractFramesAsync(string videoPath, string outputDir, double fps)
@@ -133,21 +229,30 @@ async Task<bool> ExtractFramesAsync(string videoPath, string outputDir, double f
     try
     {
         Console.WriteLine($"[INFO] Running ffmpeg...");
-        var result = await Cli.Wrap(ffmpeg)
-            .WithArguments(new[]
-            {
-                "-i", videoPath,
-                "-vf", $"fps={fps}",
-                "-q:v", "2",
-                "-y",
-                outputPattern
-            })
-            .WithValidation(CommandResultValidation.None)
-            .ExecuteBufferedAsync();
 
-        if (result.ExitCode != 0)
+        var psi = new ProcessStartInfo
         {
-            Console.WriteLine($"[ERROR] Frame extraction failed: {result.StandardError}");
+            FileName = ffmpeg,
+            Arguments = $"-i \"{videoPath}\" -vf \"fps={fps}\" -q:v 2 -y \"{outputPattern}\"",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        using var process = Process.Start(psi);
+        if (process == null)
+        {
+            Console.WriteLine("[ERROR] Failed to start ffmpeg");
+            return false;
+        }
+
+        var stderr = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        if (process.ExitCode != 0)
+        {
+            Console.WriteLine($"[ERROR] Frame extraction failed: {stderr}");
             return false;
         }
 
@@ -164,13 +269,11 @@ async Task<bool> ExtractFramesAsync(string videoPath, string outputDir, double f
 
 string? FindExecutable(params string[] names)
 {
-    // Check PATH
     var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
     var paths = pathEnv.Split(Path.PathSeparator);
 
     foreach (var name in names)
     {
-        // Direct check
         foreach (var path in paths)
         {
             var fullPath = Path.Combine(path, name);
@@ -184,7 +287,6 @@ string? FindExecutable(params string[] names)
         @"C:\ffmpeg\bin",
         @"C:\Program Files\ffmpeg\bin",
         @"C:\tools\ffmpeg\bin",
-        Environment.ExpandEnvironmentVariables(@"%LOCALAPPDATA%\Microsoft\WinGet\Packages"),
         Environment.ExpandEnvironmentVariables(@"%USERPROFILE%\scoop\shims"),
     };
 
@@ -197,23 +299,25 @@ string? FindExecutable(params string[] names)
         }
     }
 
-    // Try which/where command
+    // Try where command on Windows
     try
     {
         var cmd = OperatingSystem.IsWindows() ? "where" : "which";
-        var result = Process.Start(new ProcessStartInfo
+        var psi = new ProcessStartInfo
         {
             FileName = cmd,
             Arguments = names[0],
             RedirectStandardOutput = true,
             UseShellExecute = false,
             CreateNoWindow = true
-        });
-        result?.WaitForExit();
-        var output = result?.StandardOutput.ReadToEnd()?.Trim();
-        if (!string.IsNullOrEmpty(output) && File.Exists(output.Split('\n')[0]))
+        };
+        using var process = Process.Start(psi);
+        process?.WaitForExit();
+        var output = process?.StandardOutput.ReadToEnd()?.Trim();
+        if (!string.IsNullOrEmpty(output))
         {
-            return output.Split('\n')[0].Trim();
+            var firstLine = output.Split('\n')[0].Trim();
+            if (File.Exists(firstLine)) return firstLine;
         }
     }
     catch { }
@@ -257,7 +361,7 @@ Examples:
   dotnet run prepare.cs ""https://www.bilibili.com/video/BV1xx411c7mD"" -o ./output
 
 Requirements:
-  - yt-dlp: pip install yt-dlp
+  - .NET 10 SDK
   - ffmpeg: https://ffmpeg.org/download.html
 ");
 }

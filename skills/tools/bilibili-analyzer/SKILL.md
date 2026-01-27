@@ -4,15 +4,12 @@ description: 自动分析B站视频内容，下载视频并拆解成帧图片，
 metadata:
   short-description: B站视频AI分析工具
 source:
-  - name: yt-dlp
-    repository: https://github.com/yt-dlp/yt-dlp
-    documentation: https://github.com/yt-dlp/yt-dlp#readme
-    license: Unlicense
-    stars: 90k+
   - name: FFmpeg
     repository: https://github.com/FFmpeg/FFmpeg
     documentation: https://ffmpeg.org/documentation.html
     license: LGPL/GPL
+  - name: Bilibili API
+    documentation: https://github.com/SocialSisterYi/bilibili-API-collect
 ---
 
 # Bilibili Video Analyzer
@@ -31,8 +28,8 @@ B站视频内容分析工具。提供视频URL后，自动下载视频、拆解�
 
 | 工具 | 用途 | 文档 |
 |------|------|------|
-| **yt-dlp** | 视频下载 | [GitHub](https://github.com/yt-dlp/yt-dlp) / [Options](https://github.com/yt-dlp/yt-dlp#usage-and-options) |
 | **FFmpeg** | 视频拆帧 | [官网](https://ffmpeg.org/) / [文档](https://ffmpeg.org/ffmpeg.html) |
+| **Bilibili API** | 视频下载 | [API文档](https://github.com/SocialSisterYi/bilibili-API-collect) |
 
 ## Installation
 
@@ -47,15 +44,7 @@ B站视频内容分析工具。提供视频URL后，自动下载视频、拆解�
 dotnet --version
 ```
 
-### 2. 安装 yt-dlp
-
-```bash
-pip install yt-dlp
-```
-
-或直接下载可执行文件: https://github.com/yt-dlp/yt-dlp/releases
-
-### 3. 安装 FFmpeg
+### 2. 安装 FFmpeg
 
 **Windows:**
 ```powershell
@@ -84,7 +73,6 @@ sudo yum install ffmpeg
 
 验证安装:
 ```bash
-yt-dlp --version
 ffmpeg -version
 ```
 
@@ -372,23 +360,19 @@ Task 3: 分析 frame_0041.jpg ~ frame_0060.jpg
 
 ## API Reference
 
-### yt-dlp 常用命令
+### Bilibili API
 
-```bash
-# 下载最佳质量视频
-yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" -o video.mp4 "<URL>"
+脚本使用 Bilibili 官方 API 下载视频：
 
-# 只下载音频
-yt-dlp -x --audio-format mp3 -o audio.mp3 "<URL>"
+```
+# 获取视频信息
+GET https://api.bilibili.com/x/web-interface/view?bvid=BV1xx411c7mD
 
-# 查看可用格式
-yt-dlp -F "<URL>"
-
-# 下载字幕
-yt-dlp --write-subs --sub-lang zh-Hans -o video.mp4 "<URL>"
+# 获取播放地址
+GET https://api.bilibili.com/x/player/playurl?bvid=BV1xx411c7mD&cid={cid}&qn=80&fnval=1
 ```
 
-更多选项: https://github.com/yt-dlp/yt-dlp#usage-and-options
+API 文档: https://github.com/SocialSisterYi/bilibili-API-collect
 
 ### FFmpeg 拆帧命令
 
@@ -458,7 +442,7 @@ dotnet run scripts/prepare.cs "https://www.bilibili.com/video/BV1xx411c7mD" -o .
 
 ## Tags
 
-`bilibili`, `video-analysis`, `ai`, `frame-extraction`, `markdown`, `tutorial`, `yt-dlp`, `ffmpeg`
+`bilibili`, `video-analysis`, `ai`, `frame-extraction`, `markdown`, `tutorial`, `ffmpeg`, `dotnet`
 
 ## Compatibility
 
