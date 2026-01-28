@@ -1,11 +1,11 @@
 using Microsoft.Extensions.Logging;
 using Moq;
-using MyYuCode.Data;
-using MyYuCode.Data.Entities;
-using MyYuCode.Services.Sessions;
+using MoYuCode.Data;
+using MoYuCode.Data.Entities;
+using MoYuCode.Services.Sessions;
 using Xunit;
 
-namespace MyYuCode.Tests.Sessions;
+namespace MoYuCode.Tests.Sessions;
 
 public class SessionManagerTests : IDisposable
 {

@@ -1,9 +1,9 @@
 using FsCheck;
 using FsCheck.Fluent;
 using FsCheck.Xunit;
-using MyYuCode.Contracts.Skills;
+using MoYuCode.Contracts.Skills;
 
-namespace MyYuCode.Tests.Skills;
+namespace MoYuCode.Tests.Skills;
 
 /// <summary>
 /// Property-based tests for Skills data model validation.

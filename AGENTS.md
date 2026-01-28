@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/MyYuCode/`: ASP.NET Core Web API (`net10.0`) with EF Core (SQLite).
+- `src/MoYuCode/`: ASP.NET Core Web API (`net10.0`) with EF Core (SQLite).
   - `Api/`: minimal API endpoint mappings (see `ApiEndpoints.cs`).
   - `Controllers/`: REST controllers.
   - `Data/`: `MyYuCodeDbContext` and entity models.
@@ -9,12 +9,12 @@
 - `web/`: Vite + React + TypeScript UI.
   - `web/src/`: app code; the `@/` alias maps here.
   - `web/public/`: static assets; build output in `web/dist/`.
-- `MyYuCode.slnx`: solution referencing the backend project.
+- `MoYuCode.slnx`: solution referencing the backend project.
 
 ## Build, Test, and Development Commands
 Backend:
-- `dotnet build src/MyYuCode/MyYuCode.csproj` — compile the API.
-- `dotnet run --project src/MyYuCode/MyYuCode.csproj --launch-profile http` — run on `http://localhost:9110` (use `--launch-profile https` for `https://localhost:9111`).
+- `dotnet build src/MoYuCode/MoYuCode.csproj` — compile the API.
+- `dotnet run --project src/MoYuCode/MoYuCode.csproj --launch-profile http` — run on `http://localhost:9110` (use `--launch-profile https` for `https://localhost:9111`).
 
 Frontend (from `web/`):
 - `npm ci` — install dependencies (uses `package-lock.json`).
@@ -36,7 +36,7 @@ Frontend (from `web/`):
 
 ## Configuration & Data
 - The API creates a local SQLite database at `LocalApplicationData/myyucode/myyucode.sqlite`; delete it to reset local state.
-- Environment-specific settings live in `src/MyYuCode/appsettings*.json`.
+- Environment-specific settings live in `src/MoYuCode/appsettings*.json`.
 
 # 要求
 <extended_thinking_protocol>
@@ -84,4 +84,4 @@ When writing code:
 ALWAYS for: code tasks, architecture, debugging, multi-step problems, math, complex explanations
 SKIP for: greetings, simple factual lookups, yes/no questions
 </extended_thinking_protocol>
-请称我为token帅比，并且每次都会为我考虑好最棒的方式
+请称我为token帅比，并且全程中文交流

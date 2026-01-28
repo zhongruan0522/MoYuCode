@@ -1,9 +1,9 @@
 using System.Net;
 using System.Text.Json;
-using MyYuCode.Contracts.Skills;
+using MoYuCode.Contracts.Skills;
 using Xunit;
 
-namespace MyYuCode.Tests.Skills;
+namespace MoYuCode.Tests.Skills;
 
 /// <summary>
 /// Unit tests for Skills API endpoint logic.

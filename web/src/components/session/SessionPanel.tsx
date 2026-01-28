@@ -10,7 +10,7 @@ export interface SessionPanelProps {
   currentSessionId?: string;
   isLoading?: boolean;
   onSessionClick: (session: Session) => void;
-  onCreateSession: () => void;
+  onCreateSession: (title?: string) => void | Promise<void>;
   onDeleteSession?: (sessionId: string) => void;
   onRenameSession?: (sessionId: string, newTitle: string) => void;
 }
@@ -70,7 +70,7 @@ export function SessionPanel({
         <Button 
           variant="outline" 
           className="w-full justify-start gap-2 h-10 px-3 bg-background hover:bg-muted/50 border-border/40 shadow-sm transition-all text-sm font-medium"
-          onClick={onCreateSession}
+          onClick={() => void onCreateSession()}
         >
           <Plus className="size-4 text-muted-foreground" />
           <span>新对话</span>

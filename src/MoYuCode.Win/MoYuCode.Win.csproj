@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net10.0-windows</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <UseWindowsForms>true</UseWindowsForms>
+        <EnableWindowsTargeting>true</EnableWindowsTargeting>
+        <ApplicationIcon>favicon.ico</ApplicationIcon>
+        <Version>0.0.2.2</Version>
+        <AssemblyVersion>0.0.2.2</AssemblyVersion>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+        <PublishSingleFile>true</PublishSingleFile>
+        <SelfContained>true</SelfContained>
+        <DebugType>none</DebugType>
+        <DebugSymbols>false</DebugSymbols>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <EmbeddedResource Include="favicon.ico" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\MoYuCode\MoYuCode.csproj" />
+    </ItemGroup>
+
+</Project>

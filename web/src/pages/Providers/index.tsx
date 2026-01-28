@@ -1437,7 +1437,7 @@ export default function Providers() {
                 </div>
               </div>
               <div className="text-xs text-muted-foreground">
-                ApiKey 仅用于调用对应提供商接口，MyYuCode（摸鱼Coding）不会在前端展示完整密钥。
+                ApiKey 仅用于调用对应提供商接口，MoYuCode（摸鱼Coding）不会在前端展示完整密钥。
               </div>
             </div>
 

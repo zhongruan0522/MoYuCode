@@ -33,11 +33,21 @@ export type WriteToolInput = {
   content: string
 }
 
+export type StructuredPatchHunk = {
+  oldStart: number
+  oldLines: number
+  newStart: number
+  newLines: number
+  lines: string[]
+}
+
 export type EditToolInput = {
   filePath: string
   oldString: string
   newString: string
   replaceAll: boolean
+  originalFile?: string
+  structuredPatch?: StructuredPatchHunk[]
 }
 
 function normalizeToolNameKey(toolName: string): string {
@@ -218,9 +228,41 @@ export function tryParseEditToolInput(input: string): EditToolInput | null {
   const newString = readFirstString(args, ['new_string', 'newString'])
   const replaceAll = args.replace_all === true || args.replaceAll === true
 
+  // 解析 originalFile
+  const originalFile = readFirstString(args, ['original_file', 'originalFile'])
+
+  // 解析 structuredPatch
+  let structuredPatch: StructuredPatchHunk[] | undefined
+  const patchValue = args.structured_patch ?? args.structuredPatch
+  if (Array.isArray(patchValue)) {
+    const hunks: StructuredPatchHunk[] = []
+    for (const hunk of patchValue) {
+      if (!hunk || typeof hunk !== 'object' || Array.isArray(hunk)) continue
+      const h = hunk as Record<string, unknown>
+      const oldStart = typeof h.oldStart === 'number' ? h.oldStart : null
+      const oldLines = typeof h.oldLines === 'number' ? h.oldLines : null
+      const newStart = typeof h.newStart === 'number' ? h.newStart : null
+      const newLines = typeof h.newLines === 'number' ? h.newLines : null
+      const lines = Array.isArray(h.lines) ? h.lines.filter((l): l is string => typeof l === 'string') : null
+      if (oldStart != null && oldLines != null && newStart != null && newLines != null && lines) {
+        hunks.push({ oldStart, oldLines, newStart, newLines, lines })
+      }
+    }
+    if (hunks.length > 0) {
+      structuredPatch = hunks
+    }
+  }
+
   if (!filePath) return null
   if (oldString == null || newString == null) return null
-  return { filePath, oldString, newString, replaceAll }
+  return {
+    filePath,
+    oldString,
+    newString,
+    replaceAll,
+    originalFile: originalFile ?? undefined,
+    structuredPatch,
+  }
 }
 
 export function tryParseReadToolInput(input: string): ReadToolInput | null {

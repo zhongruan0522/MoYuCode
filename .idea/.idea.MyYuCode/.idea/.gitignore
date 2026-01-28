@@ -3,7 +3,7 @@
 /workspace.xml
 # Rider 忽略的文件
 /modules.xml
-/.idea.MyYuCode.iml
+/.idea.MoYuCode.iml
 /contentModel.xml
 /projectSettingsUpdater.xml
 # 已忽略包含查询文件的默认文件夹

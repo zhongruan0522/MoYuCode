@@ -926,7 +926,7 @@ export function ProjectsTab({ toolType }: { toolType: ToolType }) {
             <Input
               value={form.name}
               onChange={(e) => setForm((s) => ({ ...s, name: e.target.value }))}
-              placeholder="例如：MyYuCode（摸鱼Coding）"
+              placeholder="例如：MoYuCode（摸鱼Coding）"
             />
           </div>
 

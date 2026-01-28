@@ -73,12 +73,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p src/MyYuCode/wwwroot
-          rsync -a --delete web/dist/ src/MyYuCode/wwwroot/
+          mkdir -p src/MoYuCode/wwwroot
+          rsync -a --delete web/dist/ src/MoYuCode/wwwroot/
 
       - name: Build backend
         if: github.event_name != 'workflow_dispatch'
-        run: dotnet build src/MyYuCode/MyYuCode.csproj -c Release -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }}
+        run: dotnet build src/MoYuCode/MoYuCode.csproj -c Release -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }}
 
       - name: Publish backend
         if: github.event_name == 'workflow_dispatch'
@@ -86,14 +86,14 @@ jobs:
         run: |
           set -euo pipefail
           for RID in linux-x64 osx-x64; do
-            dotnet publish src/MyYuCode/MyYuCode.csproj -c Release -r "${RID}" --self-contained false -o "artifacts/publish/${RID}" -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }}
+            dotnet publish src/MoYuCode/MoYuCode.csproj -c Release -r "${RID}" --self-contained false -o "artifacts/publish/${RID}" -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }}
           done
           WIN_PUBLISH_ROOT="artifacts/publish/win-x64"
           rm -rf "${WIN_PUBLISH_ROOT}"
           mkdir -p "${WIN_PUBLISH_ROOT}"
-          dotnet publish src/MyYuCode.Win/MyYuCode.Win.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }} -p:DebugType=None -p:DebugSymbols=false -o "${WIN_PUBLISH_ROOT}"
-          if [[ ! -f "${WIN_PUBLISH_ROOT}/MyYuCode.Win.exe" ]]; then
-            echo "MyYuCode.Win.exe not found in win-x64 publish output."
+          dotnet publish src/MoYuCode.Win/MoYuCode.Win.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }} -p:DebugType=None -p:DebugSymbols=false -o "${WIN_PUBLISH_ROOT}"
+          if [[ ! -f "${WIN_PUBLISH_ROOT}/MoYuCode.Win.exe" ]]; then
+            echo "MoYuCode.Win.exe not found in win-x64 publish output."
             exit 1
           fi
 
@@ -112,14 +112,14 @@ jobs:
           export DOTNET_ENVIRONMENT=Production
           export ASPNETCORE_URLS="http://0.0.0.0:9110"
 
-          echo "MyYuCode is running at $ASPNETCORE_URLS"
+          echo "MoYuCode is running at $ASPNETCORE_URLS"
           echo "Open: http://localhost:9110"
 
-          if [[ -f "./MyYuCode" ]]; then
-            chmod +x "./MyYuCode"
-            ./MyYuCode
+          if [[ -f "./MoYuCode" ]]; then
+            chmod +x "./MoYuCode"
+            ./MoYuCode
           else
-            dotnet "./MyYuCode.dll"
+            dotnet "./MoYuCode.dll"
           fi
           EOF
           chmod +x "artifacts/publish/linux-x64/run.sh"
@@ -137,17 +137,17 @@ jobs:
             exit 1
           fi
 
-          if [[ -x "$INSTALL_DIR/MyYuCode" ]]; then
-            EXECUTABLE="$INSTALL_DIR/MyYuCode"
-          elif [[ -f "$INSTALL_DIR/MyYuCode.dll" ]]; then
+          if [[ -x "$INSTALL_DIR/MoYuCode" ]]; then
+            EXECUTABLE="$INSTALL_DIR/MoYuCode"
+          elif [[ -f "$INSTALL_DIR/MoYuCode.dll" ]]; then
             DOTNET_PATH="$(command -v dotnet || true)"
             if [[ -z "$DOTNET_PATH" ]]; then
               echo "dotnet not found in PATH." >&2
               exit 1
             fi
-            EXECUTABLE="$DOTNET_PATH $INSTALL_DIR/MyYuCode.dll"
+            EXECUTABLE="$DOTNET_PATH $INSTALL_DIR/MoYuCode.dll"
           else
-            echo "MyYuCode executable not found in $INSTALL_DIR" >&2
+            echo "MoYuCode executable not found in $INSTALL_DIR" >&2
             exit 1
           fi
 
@@ -155,7 +155,7 @@ jobs:
 
           cat > "$SERVICE_PATH" <<SERVICE_EOF
           [Unit]
-          Description=MyYuCode service
+          Description=MoYuCode service
           After=network.target
 
           [Service]
@@ -187,14 +187,14 @@ jobs:
           export DOTNET_ENVIRONMENT=Production
           export ASPNETCORE_URLS="http://0.0.0.0:9110"
 
-          echo "MyYuCode is running at $ASPNETCORE_URLS"
+          echo "MoYuCode is running at $ASPNETCORE_URLS"
           echo "Open: http://localhost:9110"
 
-          if [[ -f "./MyYuCode" ]]; then
-            chmod +x "./MyYuCode"
-            ./MyYuCode
+          if [[ -f "./MoYuCode" ]]; then
+            chmod +x "./MoYuCode"
+            ./MoYuCode
           else
-            dotnet "./MyYuCode.dll"
+            dotnet "./MoYuCode.dll"
           fi
           EOF
           chmod +x "artifacts/publish/osx-x64/run.sh"
@@ -212,12 +212,12 @@ jobs:
             exit 1
           fi
 
-          if [[ -x "$INSTALL_DIR/MyYuCode" ]]; then
-            program_args=("$INSTALL_DIR/MyYuCode" "--urls" "$URLS")
+          if [[ -x "$INSTALL_DIR/MoYuCode" ]]; then
+            program_args=("$INSTALL_DIR/MoYuCode" "--urls" "$URLS")
           else
-            dll="$INSTALL_DIR/MyYuCode.dll"
+            dll="$INSTALL_DIR/MoYuCode.dll"
             if [[ ! -f "$dll" ]]; then
-              echo "MyYuCode executable not found in $INSTALL_DIR" >&2
+              echo "MoYuCode executable not found in $INSTALL_DIR" >&2
               exit 1
             fi
             dotnet_path="$(command -v dotnet || true)"
@@ -288,9 +288,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          tar -czf "artifacts/MyYuCode-${{ steps.version.outputs.version }}-linux-x64.tar.gz" -C artifacts/publish/linux-x64 .
-          tar -czf "artifacts/MyYuCode-${{ steps.version.outputs.version }}-osx-x64.tar.gz" -C artifacts/publish/osx-x64 .
-          (cd artifacts/publish/win-x64 && zip -r "../../MyYuCode-${{ steps.version.outputs.version }}-win-x64.zip" .)
+          tar -czf "artifacts/MoYuCode-${{ steps.version.outputs.version }}-linux-x64.tar.gz" -C artifacts/publish/linux-x64 .
+          tar -czf "artifacts/MoYuCode-${{ steps.version.outputs.version }}-osx-x64.tar.gz" -C artifacts/publish/osx-x64 .
+          (cd artifacts/publish/win-x64 && zip -r "../../MoYuCode-${{ steps.version.outputs.version }}-win-x64.zip" .)
 
       - name: Create release
         if: github.event_name == 'workflow_dispatch'
@@ -302,8 +302,8 @@ jobs:
           set -euo pipefail
           TAG="v${{ steps.version.outputs.version }}"
           ASSETS=(
-            "artifacts/MyYuCode-${{ steps.version.outputs.version }}-linux-x64.tar.gz"
-            "artifacts/MyYuCode-${{ steps.version.outputs.version }}-osx-x64.tar.gz"
-            "artifacts/MyYuCode-${{ steps.version.outputs.version }}-win-x64.zip"
+            "artifacts/MoYuCode-${{ steps.version.outputs.version }}-linux-x64.tar.gz"
+            "artifacts/MoYuCode-${{ steps.version.outputs.version }}-osx-x64.tar.gz"
+            "artifacts/MoYuCode-${{ steps.version.outputs.version }}-win-x64.zip"
           )
           gh release create "${TAG}" "${ASSETS[@]}" --title "${TAG}" --notes "${RELEASE_NOTES}" --target "${GITHUB_SHA}"

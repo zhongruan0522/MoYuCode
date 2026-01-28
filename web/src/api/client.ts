@@ -111,6 +111,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ slug, targetService }),
       }),
+    uninstall: (skillName: string, targetService: 'codex' | 'claudeCode') =>
+      http<{ success: boolean; message: string }>(
+        `/api/skills/uninstall?skillName=${encodeURIComponent(skillName)}&targetService=${encodeURIComponent(targetService)}`,
+        { method: 'DELETE' },
+      ),
   },
   tools: {
     status: (tool: ToolKey) => http<ToolStatusDto>(`/api/tools/${tool}/status`),

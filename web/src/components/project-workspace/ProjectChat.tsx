@@ -1632,13 +1632,21 @@ const ChatToolCallItem = memo(function ChatToolCallItem({
   askUserQuestionDisabled: boolean
   onComposeAskUserQuestion?: (answers: Record<string, string>) => void
 }) {
-  const open = openById[message.id] ?? false
   const toolName = message.toolName ?? 'tool'
   const input = message.toolInput ?? message.text ?? ''
   const output = message.toolOutput ?? ''
   const isError = Boolean(message.toolIsError)
 
   const parsedInputData = useToolInputParsers(toolName, input)
+
+  // Read 工具默认折叠，Edit 工具默认展开
+  const defaultOpen = useMemo(() => {
+    if (isReadToolName(toolName)) return false
+    if (isEditToolName(toolName)) return true
+    return false
+  }, [toolName])
+
+  const open = openById[message.id] ?? defaultOpen
 
   const exitPlanFromOutput = useMemo(() => {
     const trimmed = (output ?? '').trim()

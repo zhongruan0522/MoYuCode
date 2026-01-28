@@ -1,9 +1,9 @@
-# MyYuCode（摸鱼Coding） 技能市场与注册表方案（简化版优先）
+# MoYuCode（摸鱼Coding） 技能市场与注册表方案（简化版优先）
 
 ## 0. 简化版优先级（当前阶段）
 - 以 GitHub API 读取本仓库 `skills/` 目录与统一 `skills/index.json` 作为唯一数据源。
-- 不建设独立 API 服务，MyYuCode（摸鱼Coding） 直接对接 GitHub API。
-- MyYuCode（摸鱼Coding） 内置 UI 提供远端浏览与本地安装管理（覆盖 Codex 与 ClaudeCode）。
+- 不建设独立 API 服务，MoYuCode（摸鱼Coding） 直接对接 GitHub API。
+- MoYuCode（摸鱼Coding） 内置 UI 提供远端浏览与本地安装管理（覆盖 Codex 与 ClaudeCode）。
 - 无人工审核，发布即生效；以风险提示与下架标记治理。
 
 ## 1. 目标与原则
@@ -11,12 +11,12 @@
 - 不涉及商业化与付费流程。
 - 完全兼容 `SKILL.md`，不要求新增强制文件。
 - 使用 GitHub API 获取索引与 `SKILL.md` 内容。
-- MyYuCode（摸鱼Coding） 内置 UI 完成搜索、下载与覆盖安装。
+- MoYuCode（摸鱼Coding） 内置 UI 完成搜索、下载与覆盖安装。
 
 ## 2. 范围与非目标
 范围包含：
 - 本仓库 `skills/` 目录与统一 JSON 索引。
-- MyYuCode（摸鱼Coding） UI 的市场浏览与本地技能管理。
+- MoYuCode（摸鱼Coding） UI 的市场浏览与本地技能管理。
 - GitHub 贡献流程（PR/Release）作为发布方式。
 - 风险提示、举报与下架标记。
 
@@ -79,7 +79,7 @@
 - 版本状态：`active` 与 `yanked`（下架，不可安装但保留历史）。
 - 版本页需提示“此版本已更新”并显示更新时间。
 
-## 6. MyYuCode（摸鱼Coding） 安装体验（简化版）
+## 6. MoYuCode（摸鱼Coding） 安装体验（简化版）
 - 市场内搜索/浏览 -> 详情页 -> 选择版本 -> 安装。
 - 同名技能直接覆盖安装；安装失败则回滚或保留旧版本。
 - 安装前展示风险提示标签（不阻塞）。
@@ -183,9 +183,9 @@ skills/
         hello.ps1
 ```
 
-## 17. MyYuCode（摸鱼Coding） 本地技能管理交互与状态流转
+## 17. MoYuCode（摸鱼Coding） 本地技能管理交互与状态流转
 交互流程（简化版）：
-- 入口：MyYuCode（摸鱼Coding） -> Skills。
+- 入口：MoYuCode（摸鱼Coding） -> Skills。
 - 顶部过滤：All / Codex / ClaudeCode。
 - 列表页：显示本地已安装与远端可安装技能。
 - 详情页：渲染 `SKILL.md`，提供安装/覆盖/卸载/导入。

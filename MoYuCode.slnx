@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MoYuCode.Win/MoYuCode.Win.csproj" />
+    <Project Path="src/MoYuCode/MoYuCode.csproj" />
+  </Folder>
+</Solution>

@@ -1,12 +1,12 @@
-# MyYuCode（摸鱼Coding）
+# MoYuCode（摸鱼Coding）
 
 <div align="center">
 
 **一键管理 Codex 和 Claude Code，这是开源版的 ZCode**
 
-[![CI](https://github.com/AIDotNet/MyYuCode/workflows/CI/badge.svg)](https://github.com/AIDotNet/MyYuCode/actions)
-[![Release](https://img.shields.io/github/v/release/AIDotNet/MyYuCode)](https://github.com/AIDotNet/MyYuCode/releases)
-[![License](https://img.shields.io/github/license/AIDotNet/MyYuCode)](LICENSE)
+[![CI](https://github.com/AIDotNet/MoYuCode/workflows/CI/badge.svg)](https://github.com/AIDotNet/MoYuCode/actions)
+[![Release](https://img.shields.io/github/v/release/AIDotNet/MoYuCode)](https://github.com/AIDotNet/MoYuCode/releases)
+[![License](https://img.shields.io/github/license/AIDotNet/MoYuCode)](LICENSE)
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -14,7 +14,7 @@
 
 ## 简介
 
-MyYuCode（摸鱼Coding）是一款开源工具，旨在帮助用户通过 Web 界面便捷操作 [Codex](https://github.com/openai/codex) 和 [Claude Code](https://claude.ai/code)。它支持本地部署，并可通过内网映射实现外网访问，方便用户通过手机等设备远程使用。部分设计体验参考了 [ZCode](https://zcode.dev/)。
+MoYuCode（摸鱼Coding）是一款开源工具，旨在帮助用户通过 Web 界面便捷操作 [Codex](https://github.com/openai/codex) 和 [Claude Code](https://claude.ai/code)。它支持本地部署，并可通过内网映射实现外网访问，方便用户通过手机等设备远程使用。部分设计体验参考了 [ZCode](https://zcode.dev/)。
 
 ## 功能特性
 
@@ -30,7 +30,7 @@ MyYuCode（摸鱼Coding）是一款开源工具，旨在帮助用户通过 Web �
 ## 截图
 
 ### 系统托盘
-运行 MyYuCode.Win.exe 后，会在系统托盘显示图标，后台服务自动运行。
+运行 MoYuCode.Win.exe 后，会在系统托盘显示图标，后台服务自动运行。
 
 ### 项目选择
 自动扫描本地已使用 Codex 的项目并加载到界面，用户可选择项目进入工作区。
@@ -47,19 +47,19 @@ MyYuCode（摸鱼Coding）是一款开源工具，旨在帮助用户通过 Web �
 
 ### Windows 桌面应用
 
-1. 访问 [GitHub 发布页](https://github.com/AIDotNet/MyYuCode/releases)
-2. 下载最新的 Windows 压缩包（`MyYuCode-*-win-x64.zip`）
-3. 解压后运行 `MyYuCode.Win.exe`
+1. 访问 [GitHub 发布页](https://github.com/AIDotNet/MoYuCode/releases)
+2. 下载最新的 Windows 压缩包（`MoYuCode-*-win-x64.zip`）
+3. 解压后运行 `MoYuCode.Win.exe`
 4. 程序会在系统托盘显示图标
 5. 打开浏览器访问 `http://localhost:9110/`
 
 ### Linux
 
-1. 从[发布页](https://github.com/AIDotNet/MyYuCode/releases)下载最新的 Linux 包（`MyYuCode-*-linux-x64.tar.gz`）
+1. 从[发布页](https://github.com/AIDotNet/MoYuCode/releases)下载最新的 Linux 包（`MoYuCode-*-linux-x64.tar.gz`）
 2. 解压文件：
    ```bash
-   tar -xzf MyYuCode-*-linux-x64.tar.gz
-   cd MyYuCode-*-linux-x64
+   tar -xzf MoYuCode-*-linux-x64.tar.gz
+   cd MoYuCode-*-linux-x64
    ```
 3. 直接运行：
    ```bash
@@ -72,11 +72,11 @@ MyYuCode（摸鱼Coding）是一款开源工具，旨在帮助用户通过 Web �
 
 ### macOS
 
-1. 从[发布页](https://github.com/AIDotNet/MyYuCode/releases)下载最新的 macOS 包（`MyYuCode-*-osx-x64.tar.gz`）
+1. 从[发布页](https://github.com/AIDotNet/MoYuCode/releases)下载最新的 macOS 包（`MoYuCode-*-osx-x64.tar.gz`）
 2. 解压文件：
    ```bash
-   tar -xzf MyYuCode-*-osx-x64.tar.gz
-   cd MyYuCode-*-osx-x64
+   tar -xzf MoYuCode-*-osx-x64.tar.gz
+   cd MoYuCode-*-osx-x64
    ```
 3. 直接运行：
    ```bash
@@ -97,7 +97,7 @@ MyYuCode（摸鱼Coding）是一款开源工具，旨在帮助用户通过 Web �
 
 ## 使用说明
 
-### 访问 MyYuCode（摸鱼Coding）
+### 访问 MoYuCode（摸鱼Coding）
 
 启动应用程序后，在浏览器中打开：
 
@@ -106,7 +106,7 @@ MyYuCode（摸鱼Coding）是一款开源工具，旨在帮助用户通过 Web �
 
 ### 项目工作流
 
-1. **选择项目**：MyYuCode（摸鱼Coding） 自动扫描有 Codex 使用历史的项目
+1. **选择项目**：MoYuCode（摸鱼Coding） 自动扫描有 Codex 使用历史的项目
 2. **进入工作区**：点击项目进入其工作空间
 3. **开始对话**：开始新聊天或加载历史会话
 4. **查看代码**：使用集成的文件浏览器查看和编辑文件
@@ -125,13 +125,13 @@ MyYuCode（摸鱼Coding）是一款开源工具，旨在帮助用户通过 Web �
 
 ```bash
 # 构建
-dotnet build src/MyYuCode/MyYuCode.csproj
+dotnet build src/MoYuCode/MoYuCode.csproj
 
 # 运行 (HTTP)
-dotnet run --project src/MyYuCode/MyYuCode.csproj --launch-profile http
+dotnet run --project src/MoYuCode/MoYuCode.csproj --launch-profile http
 
 # 运行 (HTTPS)
-dotnet run --project src/MyYuCode/MyYuCode.csproj --launch-profile https
+dotnet run --project src/MoYuCode/MoYuCode.csproj --launch-profile https
 ```
 
 ### 前端 (React / Vite)
@@ -164,15 +164,15 @@ npm ci
 npm run build
 
 # 同步前端到后端 wwwroot
-rsync -a --delete web/dist/ src/MyYuCode/wwwroot/
+rsync -a --delete web/dist/ src/MoYuCode/wwwroot/
 
 # 构建后端
-dotnet build src/MyYuCode/MyYuCode.csproj -c Release
+dotnet build src/MoYuCode/MoYuCode.csproj -c Release
 ```
 
 ## 架构
 
-MyYuCode（摸鱼Coding） 采用双栈架构：
+MoYuCode（摸鱼Coding） 采用双栈架构：
 
 ### 后端
 - **框架**：ASP.NET Core 10.0 Web API
@@ -205,9 +205,9 @@ MyYuCode（摸鱼Coding） 采用双栈架构：
 
 ## 社区
 
-- GitHub: [https://github.com/AIDotNet/MyYuCode](https://github.com/AIDotNet/MyYuCode)
-- 问题反馈: [https://github.com/AIDotNet/MyYuCode/issues](https://github.com/AIDotNet/MyYuCode/issues)
-- 讨论区: [https://github.com/AIDotNet/MyYuCode/discussions](https://github.com/AIDotNet/MyYuCode/discussions)
+- GitHub: [https://github.com/AIDotNet/MoYuCode](https://github.com/AIDotNet/MoYuCode)
+- 问题反馈: [https://github.com/AIDotNet/MoYuCode/issues](https://github.com/AIDotNet/MoYuCode/issues)
+- 讨论区: [https://github.com/AIDotNet/MoYuCode/discussions](https://github.com/AIDotNet/MoYuCode/discussions)
 
 ## 致谢
 

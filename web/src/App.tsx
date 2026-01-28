@@ -133,7 +133,7 @@ export default function App() {
 
   useEffect(() => {
     const controller = new AbortController()
-    fetch('https://api.github.com/repos/AIDotNet/MyYuCode/releases/latest', {
+    fetch('https://api.github.com/repos/AIDotNet/MoYuCode/releases/latest', {
       signal: controller.signal,
       headers: {
         Accept: 'application/vnd.github+json',

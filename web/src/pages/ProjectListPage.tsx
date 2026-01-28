@@ -217,6 +217,21 @@ export function ProjectListPage({ mode }: ProjectListPageProps) {
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
+  // Batch selection state
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [batchOperationBusy, setBatchOperationBusy] = useState(false)
+  const [batchDeleteDialogOpen, setBatchDeleteDialogOpen] = useState(false)
+  const [batchDeleteError, setBatchDeleteError] = useState<string | null>(null)
+
+  // Batch context menu state
+  const [batchMenu, setBatchMenu] = useState<{ x: number; y: number } | null>(null)
+
+  // Close batch context menu
+  const closeBatchMenu = useCallback(() => {
+    setBatchMenu(null)
+  }, [])
+
   // Close project context menu
   const closeProjectMenu = useCallback(() => {
     setProjectMenu(null)
@@ -461,6 +476,23 @@ export function ProjectListPage({ mode }: ProjectListPageProps) {
     [],
   )
 
+  const openBatchContextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>, _projectId?: string) => {
+      event.preventDefault()
+      event.stopPropagation()
+
+      if (typeof window === 'undefined') return
+      if (selectedIds.size === 0) return
+
+      const menuWidth = 200
+      const menuHeight = 180
+      const x = Math.min(event.clientX, Math.max(0, window.innerWidth - menuWidth))
+      const y = Math.min(event.clientY, Math.max(0, window.innerHeight - menuHeight))
+      setBatchMenu({ x, y })
+    },
+    [selectedIds.size],
+  )
+
   const openCreateProject = useCallback(() => {
     closeProjectMenu()
     setUpsertMode('create')
@@ -621,6 +653,142 @@ export function ProjectListPage({ mode }: ProjectListPageProps) {
     }
   }, [closeProjectMenu, projectMenu])
 
+  // Close batch menu on escape or scroll
+  useEffect(() => {
+    if (!batchMenu) return
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeBatchMenu()
+    }
+
+    const onScroll = () => closeBatchMenu()
+
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('scroll', onScroll, true)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('scroll', onScroll, true)
+    }
+  }, [closeBatchMenu, batchMenu])
+
+  // Exit selection mode on Escape
+  useEffect(() => {
+    if (!selectionMode) return
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !batchDeleteDialogOpen && !batchMenu) {
+        setSelectionMode(false)
+        setSelectedIds(new Set())
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [selectionMode, batchDeleteDialogOpen, batchMenu])
+
+  // Batch selection handlers
+  const toggleSelectionMode = useCallback(() => {
+    setSelectionMode((prev) => {
+      if (prev) {
+        setSelectedIds(new Set())
+      }
+      return !prev
+    })
+  }, [])
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }, [])
+
+  const selectAll = useCallback(() => {
+    setSelectedIds(new Set(projects.map((p) => p.id)))
+  }, [projects])
+
+  const deselectAll = useCallback(() => {
+    setSelectedIds(new Set())
+  }, [])
+
+  const openBatchDelete = useCallback(() => {
+    if (selectedIds.size === 0) return
+    setBatchDeleteError(null)
+    setBatchDeleteDialogOpen(true)
+  }, [selectedIds.size])
+
+  const confirmBatchDelete = useCallback(async () => {
+    if (selectedIds.size === 0) return
+    setBatchOperationBusy(true)
+    setBatchDeleteError(null)
+
+    const idsToDelete = Array.from(selectedIds)
+    const previousProjects = [...projects]
+
+    // Optimistically remove from UI
+    setProjects((prev) => prev.filter((p) => !selectedIds.has(p.id)))
+    setBatchDeleteDialogOpen(false)
+
+    try {
+      await Promise.all(idsToDelete.map((id) => api.projects.delete(id)))
+      setSelectedIds(new Set())
+      setSelectionMode(false)
+      invalidateProjectListCache(config.toolTypes)
+      broadcastProjectListChange(config.toolTypes, 'deleted')
+    } catch (e) {
+      setProjects(previousProjects)
+      setBatchDeleteError((e as Error).message)
+      setBatchDeleteDialogOpen(true)
+    } finally {
+      setBatchOperationBusy(false)
+    }
+  }, [config.toolTypes, projects, selectedIds])
+
+  const batchUpdatePin = useCallback(
+    async (isPinned: boolean) => {
+      if (selectedIds.size === 0) return
+      setBatchOperationBusy(true)
+
+      const idsToUpdate = Array.from(selectedIds)
+      const previousProjects = [...projects]
+
+      setProjects((prev) => {
+        const updated = prev.map((p) =>
+          selectedIds.has(p.id) ? { ...p, isPinned } : p
+        )
+        updated.sort((x, y) => {
+          if (x.isPinned !== y.isPinned) return x.isPinned ? -1 : 1
+          const ax = Date.parse(x.updatedAtUtc || x.createdAtUtc)
+          const ay = Date.parse(y.updatedAtUtc || y.createdAtUtc)
+          if (!Number.isNaN(ax) && !Number.isNaN(ay) && ax !== ay) return ay - ax
+          return x.name.localeCompare(y.name)
+        })
+        return updated
+      })
+
+      try {
+        await Promise.all(
+          idsToUpdate.map((id) => api.projects.updatePin(id, { isPinned }))
+        )
+        setSelectedIds(new Set())
+        setSelectionMode(false)
+        invalidateProjectListCache(config.toolTypes)
+        broadcastProjectListChange(config.toolTypes, 'pinned')
+      } catch (e) {
+        setProjects(previousProjects)
+        setError((e as Error).message)
+      } finally {
+        setBatchOperationBusy(false)
+      }
+    },
+    [config.toolTypes, projects, selectedIds],
+  )
+
   const handleScanProjects = useCallback(() => {
     void startScan({ force: true })
   }, [startScan])
@@ -694,6 +862,16 @@ export function ProjectListPage({ mode }: ProjectListPageProps) {
         onScanProjects={handleScanProjects}
         onStopScan={stopScan}
         onGoInstallTool={handleGoInstallTool}
+        selectionMode={selectionMode}
+        selectedIds={selectedIds}
+        onToggleSelectionMode={toggleSelectionMode}
+        onToggleSelect={toggleSelect}
+        onSelectAll={selectAll}
+        onDeselectAll={deselectAll}
+        onBatchDelete={openBatchDelete}
+        onBatchPin={batchUpdatePin}
+        batchOperationBusy={batchOperationBusy}
+        onOpenBatchContextMenu={openBatchContextMenu}
       />
 
       {/* Project context menu */}
@@ -752,6 +930,92 @@ export function ProjectListPage({ mode }: ProjectListPageProps) {
                   onClick={() => openDelete(projectMenuTarget)}
                 >
                   删除
+                </button>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+
+      {/* Batch context menu */}
+      {batchMenu && selectionMode && selectedIds.size > 0 && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-50"
+              onMouseDown={closeBatchMenu}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                closeBatchMenu()
+              }}
+              role="presentation"
+            >
+              <div
+                className="fixed min-w-[180px] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95 duration-200 ease-out"
+                style={{ left: batchMenu.x, top: batchMenu.y }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onContextMenu={(e) => e.preventDefault()}
+                role="menu"
+              >
+                <div className="px-3 py-2 text-xs text-muted-foreground">
+                  已选 {selectedIds.size} 个项目
+                </div>
+                <div className="h-px bg-border" />
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent"
+                  disabled={batchOperationBusy}
+                  onClick={() => {
+                    closeBatchMenu()
+                    selectAll()
+                  }}
+                >
+                  全选
+                </button>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent"
+                  disabled={batchOperationBusy}
+                  onClick={() => {
+                    closeBatchMenu()
+                    deselectAll()
+                  }}
+                >
+                  取消全选
+                </button>
+                <div className="h-px bg-border" />
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent"
+                  disabled={batchOperationBusy}
+                  onClick={() => {
+                    closeBatchMenu()
+                    void batchUpdatePin(true)
+                  }}
+                >
+                  批量置顶
+                </button>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent"
+                  disabled={batchOperationBusy}
+                  onClick={() => {
+                    closeBatchMenu()
+                    void batchUpdatePin(false)
+                  }}
+                >
+                  批量取消置顶
+                </button>
+                <div className="h-px bg-border" />
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-destructive hover:bg-destructive/10"
+                  disabled={batchOperationBusy}
+                  onClick={() => {
+                    closeBatchMenu()
+                    openBatchDelete()
+                  }}
+                >
+                  批量删除
                 </button>
               </div>
             </div>,
@@ -872,6 +1136,45 @@ export function ProjectListPage({ mode }: ProjectListPageProps) {
               }}
             >
               删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Batch delete confirmation dialog */}
+      <AlertDialog
+        open={batchDeleteDialogOpen}
+        onOpenChange={(open) => {
+          if (open) {
+            setBatchDeleteDialogOpen(true)
+            return
+          }
+          if (batchOperationBusy) return
+          setBatchDeleteDialogOpen(false)
+          setBatchDeleteError(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>批量删除项目</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定删除选中的 {selectedIds.size} 个项目吗？此操作不可恢复。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {batchDeleteError ? (
+            <div className="text-sm text-destructive">{batchDeleteError}</div>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={batchOperationBusy}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={batchOperationBusy}
+              onClick={(e) => {
+                e.preventDefault()
+                void confirmBatchDelete()
+              }}
+            >
+              删除 {selectedIds.size} 个项目
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

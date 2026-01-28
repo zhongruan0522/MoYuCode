@@ -7,9 +7,9 @@ artifacts/
 .tmpbuild/
 web/node_modules/
 web/dist/
-src/MyYuCode/wwwroot/
+src/MoYuCode/wwwroot/
 /artifacts
-/src/MyYuCode/wwwroot
+/src/MoYuCode/wwwroot
 node_modules
-/.vs/MyYuCode.slnx
+/.vs/MoYuCode.slnx
 *.DotSettings.user

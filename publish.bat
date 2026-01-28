@@ -1,7 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 
-rem MyYuCode publish script (Windows)
+rem MoYuCode publish script (Windows)
 rem 1) Build frontend (Vite)
 rem 2) Copy dist -> backend wwwroot
 rem 3) dotnet publish backend
@@ -12,7 +12,7 @@ pushd "%ROOT%" >nul
 
 set "WEB_DIR=%ROOT%web"
 set "WEB_DIST=%ROOT%web\dist"
-set "BACKEND_WWWROOT=%ROOT%src\MyYuCode\wwwroot"
+set "BACKEND_WWWROOT=%ROOT%src\MoYuCode\wwwroot"
 set "PUBLISH_DIR=%ROOT%artifacts\publish"
 set "RUNTIME=win-x64"
 
@@ -42,26 +42,26 @@ if %ROBO% GEQ 8 goto :error
 echo [3/4] Publishing backend...
 if exist "%PUBLISH_DIR%" rmdir /s /q "%PUBLISH_DIR%"
 mkdir "%PUBLISH_DIR%" >nul
-call dotnet publish "%ROOT%src\MyYuCode\MyYuCode.csproj" -c Release -r %RUNTIME% --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "%PUBLISH_DIR%"
+call dotnet publish "%ROOT%src\MoYuCode\MoYuCode.csproj" -c Release -r %RUNTIME% --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "%PUBLISH_DIR%"
 if errorlevel 1 goto :error
 
 echo [4/4] Publishing Windows tray...
 set "WIN_TRAY_DIR=%PUBLISH_DIR%\win-tray"
 if exist "%WIN_TRAY_DIR%" rmdir /s /q "%WIN_TRAY_DIR%"
 mkdir "%WIN_TRAY_DIR%" >nul
-call dotnet publish "%ROOT%src\MyYuCode.Win\MyYuCode.Win.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false -o "%WIN_TRAY_DIR%"
+call dotnet publish "%ROOT%src\MoYuCode.Win\MoYuCode.Win.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false -o "%WIN_TRAY_DIR%"
 if errorlevel 1 goto :error
-if not exist "%WIN_TRAY_DIR%\MyYuCode.Win.exe" (
-  echo WinForms publish did not produce "MyYuCode.Win.exe".
+if not exist "%WIN_TRAY_DIR%\MoYuCode.Win.exe" (
+  echo WinForms publish did not produce "MoYuCode.Win.exe".
   goto :error
 )
-copy /y "%WIN_TRAY_DIR%\MyYuCode.Win.exe" "%PUBLISH_DIR%\MyYuCode.Win.exe" >nul
+copy /y "%WIN_TRAY_DIR%\MoYuCode.Win.exe" "%PUBLISH_DIR%\MoYuCode.Win.exe" >nul
 rmdir /s /q "%WIN_TRAY_DIR%"
 
 echo.
 echo Done.
 echo Output: "%PUBLISH_DIR%"
-echo Tray app: "%PUBLISH_DIR%\MyYuCode.Win.exe"
+echo Tray app: "%PUBLISH_DIR%\MoYuCode.Win.exe"
 
 popd >nul
 endlocal

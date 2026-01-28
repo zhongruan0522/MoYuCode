@@ -108,7 +108,7 @@ function PwaInstallPrompt() {
     <AlertDialog open={open} onOpenChange={setOpen}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>安装 MyYuCode（摸鱼Coding） 应用</AlertDialogTitle>
+          <AlertDialogTitle>安装 MoYuCode（摸鱼Coding） 应用</AlertDialogTitle>
           <AlertDialogDescription>
             推荐安装为 PWA，以获得更流畅的体验和离线访问能力。
           </AlertDialogDescription>

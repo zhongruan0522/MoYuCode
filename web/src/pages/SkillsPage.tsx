@@ -8,7 +8,15 @@ import { useOnlineStatus } from '@/hooks/useOnlineStatus'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
-import { Search, RefreshCw } from 'lucide-react'
+import { Search, RefreshCw, Trash2, Store, Terminal } from 'lucide-react'
+import { cn } from '@/lib/utils'
+
+type TabType = 'market' | 'codex' | 'claudeCode'
+
+type InstalledSkillInfo = {
+  name: string
+  skill: SkillDto | null
+}
 
 /**
  * Filter skills based on search query
@@ -35,6 +43,8 @@ export function SkillsPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [installModalOpen, setInstallModalOpen] = useState(false)
   const [selectedSkill, setSelectedSkill] = useState<SkillDto | null>(null)
+  const [activeTab, setActiveTab] = useState<TabType>('market')
+  const [uninstalling, setUninstalling] = useState<string | null>(null)
 
   const isOnline = useOnlineStatus()
 
@@ -75,6 +85,24 @@ export function SkillsPage() {
     [skills, searchQuery]
   )
 
+  // Get installed skills for specific service
+  const getInstalledSkills = useCallback((service: 'codex' | 'claudeCode'): InstalledSkillInfo[] => {
+    const result: InstalledSkillInfo[] = []
+    for (const [name, status] of Object.entries(installedMap)) {
+      if ((service === 'codex' && status.codex) || (service === 'claudeCode' && status.claudeCode)) {
+        const skill = skills.find(s => {
+          const skillName = s.slug.includes('/') ? s.slug.split('/').pop()! : s.slug
+          return skillName === name
+        })
+        result.push({ name, skill: skill ?? null })
+      }
+    }
+    return result
+  }, [installedMap, skills])
+
+  const codexInstalledSkills = useMemo(() => getInstalledSkills('codex'), [getInstalledSkills])
+  const claudeInstalledSkills = useMemo(() => getInstalledSkills('claudeCode'), [getInstalledSkills])
+
   const handleRetry = useCallback(() => {
     void loadSkills()
   }, [loadSkills])
@@ -92,6 +120,18 @@ export function SkillsPage() {
   const handleInstallComplete = useCallback(() => {
     // Refresh installed status after installation
     void loadInstalledStatus()
+  }, [loadInstalledStatus])
+
+  const handleUninstall = useCallback(async (skillName: string, service: 'codex' | 'claudeCode') => {
+    setUninstalling(`${skillName}-${service}`)
+    try {
+      await api.skills.uninstall(skillName, service)
+      await loadInstalledStatus()
+    } catch (e) {
+      console.error('Failed to uninstall skill:', e)
+    } finally {
+      setUninstalling(null)
+    }
   }, [loadInstalledStatus])
 
   // Loading state
@@ -154,58 +194,227 @@ export function SkillsPage() {
       {/* Offline indicator */}
       <OfflineIndicator />
 
-      {/* Header with search */}
+      {/* Header with search and tabs */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold">技能市场</h1>
           <p className="text-sm text-muted-foreground">
-            发现和浏览可用的技能 ({filteredSkills.length}/{skills.length})
+            {activeTab === 'market' 
+              ? `发现和浏览可用的技能 (${filteredSkills.length}/${skills.length})`
+              : activeTab === 'codex'
+              ? `Codex 已安装 (${codexInstalledSkills.length})`
+              : `Claude Code 已安装 (${claudeInstalledSkills.length})`
+            }
           </p>
         </div>
 
-        {/* Search input */}
-        <div className="relative w-full sm:w-72">
-          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            type="search"
-            placeholder="搜索技能..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9"
-            data-testid="search-input"
-          />
+        <div className="flex items-center gap-3">
+          {/* Tab switcher */}
+          <div className="flex items-center gap-1 p-1 rounded-lg bg-muted/50">
+            <button
+              type="button"
+              onClick={() => setActiveTab('market')}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all duration-200',
+                activeTab === 'market'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-background/50'
+              )}
+            >
+              <Store className="w-3.5 h-3.5" />
+              市场
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('codex')}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all duration-200',
+                activeTab === 'codex'
+                  ? 'bg-purple-500/20 text-purple-600 dark:text-purple-400 shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-background/50'
+              )}
+            >
+              <Terminal className="w-3.5 h-3.5" />
+              Codex
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('claudeCode')}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all duration-200',
+                activeTab === 'claudeCode'
+                  ? 'bg-orange-500/20 text-orange-600 dark:text-orange-400 shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-background/50'
+              )}
+            >
+              <Terminal className="w-3.5 h-3.5" />
+              Claude
+            </button>
+          </div>
+
+          {/* Search input - only show in market tab */}
+          {activeTab === 'market' && (
+            <div className="relative w-full sm:w-72">
+              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="search"
+                placeholder="搜索技能..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9"
+                data-testid="search-input"
+              />
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Skills grid */}
-      {filteredSkills.length > 0 ? (
-        <div
-          className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-          data-testid="skills-grid"
-        >
-          {filteredSkills.map((skill) => {
-            // Extract skill name from slug (e.g., "tools/bilibili-analyzer" -> "bilibili-analyzer")
-            const skillName = skill.slug.includes('/') ? skill.slug.split('/').pop()! : skill.slug
-            return (
-              <SkillCard 
-                key={skill.slug} 
-                skill={skill} 
-                installedStatus={installedMap[skillName]}
-                onInstall={handleInstall} 
-              />
-            )
-          })}
-        </div>
-      ) : (
-        <div className="flex h-48 items-center justify-center" data-testid="no-results">
-          <p className="text-sm text-muted-foreground">
-            没有找到匹配的技能
-          </p>
-        </div>
+      {/* Skills grid - Market tab */}
+      {activeTab === 'market' && (
+        <>
+          {filteredSkills.length > 0 ? (
+            <div
+              className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+              data-testid="skills-grid"
+            >
+              {filteredSkills.map((skill) => {
+                const skillName = skill.slug.includes('/') ? skill.slug.split('/').pop()! : skill.slug
+                return (
+                  <SkillCard 
+                    key={skill.slug} 
+                    skill={skill} 
+                    installedStatus={installedMap[skillName]}
+                    onInstall={handleInstall} 
+                  />
+                )
+              })}
+            </div>
+          ) : (
+            <div className="flex h-48 items-center justify-center" data-testid="no-results">
+              <p className="text-sm text-muted-foreground">
+                没有找到匹配的技能
+              </p>
+            </div>
+          )}
+        </>
       )}
 
-      {/* Refresh button when online */}
-      {isOnline && (
+      {/* Installed skills - Codex tab */}
+      {activeTab === 'codex' && (
+        <>
+          {codexInstalledSkills.length > 0 ? (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {codexInstalledSkills.map(({ name, skill }) => (
+                <div
+                  key={name}
+                  className="group relative rounded-xl border bg-card p-5 transition-all duration-300 hover:shadow-lg hover:-translate-y-1"
+                >
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-purple-500/10">
+                        <Terminal className="w-4 h-4 text-purple-500" />
+                      </div>
+                      <h3 className="font-semibold text-base">{skill?.name ?? name}</h3>
+                    </div>
+                  </div>
+                  {skill && (
+                    <p className="text-sm text-muted-foreground mb-3 line-clamp-2">
+                      {skill.summary}
+                    </p>
+                  )}
+                  <div className="flex items-center justify-between pt-3 border-t border-border/50">
+                    <span className="text-xs text-muted-foreground font-mono">
+                      {skill ? `v${skill.version}` : name}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      className="h-7 px-3 text-xs"
+                      disabled={uninstalling === `${name}-codex`}
+                      onClick={() => handleUninstall(name, 'codex')}
+                    >
+                      {uninstalling === `${name}-codex` ? (
+                        <Spinner className="w-3 h-3" />
+                      ) : (
+                        <>
+                          <Trash2 className="w-3 h-3 mr-1" />
+                          卸载
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex h-48 items-center justify-center">
+              <p className="text-sm text-muted-foreground">
+                Codex 暂无已安装的技能
+              </p>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Installed skills - Claude Code tab */}
+      {activeTab === 'claudeCode' && (
+        <>
+          {claudeInstalledSkills.length > 0 ? (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {claudeInstalledSkills.map(({ name, skill }) => (
+                <div
+                  key={name}
+                  className="group relative rounded-xl border bg-card p-5 transition-all duration-300 hover:shadow-lg hover:-translate-y-1"
+                >
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-orange-500/10">
+                        <Terminal className="w-4 h-4 text-orange-500" />
+                      </div>
+                      <h3 className="font-semibold text-base">{skill?.name ?? name}</h3>
+                    </div>
+                  </div>
+                  {skill && (
+                    <p className="text-sm text-muted-foreground mb-3 line-clamp-2">
+                      {skill.summary}
+                    </p>
+                  )}
+                  <div className="flex items-center justify-between pt-3 border-t border-border/50">
+                    <span className="text-xs text-muted-foreground font-mono">
+                      {skill ? `v${skill.version}` : name}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      className="h-7 px-3 text-xs"
+                      disabled={uninstalling === `${name}-claudeCode`}
+                      onClick={() => handleUninstall(name, 'claudeCode')}
+                    >
+                      {uninstalling === `${name}-claudeCode` ? (
+                        <Spinner className="w-3 h-3" />
+                      ) : (
+                        <>
+                          <Trash2 className="w-3 h-3 mr-1" />
+                          卸载
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex h-48 items-center justify-center">
+              <p className="text-sm text-muted-foreground">
+                Claude Code 暂无已安装的技能
+              </p>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Refresh button when online - only in market tab */}
+      {isOnline && activeTab === 'market' && (
         <div className="flex justify-center pt-4">
           <Button
             variant="ghost"

@@ -4,20 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MyYuCode（摸鱼Coding） is a dual-stack application providing a web UI for AI coding assistants (Codex and Claude Code). The backend is an ASP.NET Core Web API (net10.0) that integrates with the OpenAI Codex app-server via JSON-RPC over stdio. The frontend is a Vite + React + TypeScript SPA with Tailwind CSS.
+MoYuCode（摸鱼Coding） is a dual-stack application providing a web UI for AI coding assistants (Codex and Claude Code). The backend is an ASP.NET Core Web API (net10.0) that integrates with the OpenAI Codex app-server via JSON-RPC over stdio. The frontend is a Vite + React + TypeScript SPA with Tailwind CSS.
 
 ## Build Commands
 
 ### Backend (C# API)
-- Build: `dotnet build src/MyYuCode/MyYuCode.csproj`
-- Run (HTTP): `dotnet run --project src/MyYuCode/MyYuCode.csproj --launch-profile http`
+- Build: `dotnet build src/MoYuCode/MoYuCode.csproj`
+- Run (HTTP): `dotnet run --project src/MoYuCode/MoYuCode.csproj --launch-profile http`
   - Runs on `http://localhost:9110`
-- Run (HTTPS): `dotnet run --project src/MyYuCode/MyYuCode.csproj --launch-profile https`
+- Run (HTTPS): `dotnet run --project src/MoYuCode/MoYuCode.csproj --launch-profile https`
   - Runs on `https://localhost:9111`
 
-### Windows Desktop App (MyYuCode.Win)
-- Build: `dotnet build src/MyYuCode.Win/MyYuCode.Win.csproj`
-- Run: `dotnet run --project src/MyYuCode.Win/MyYuCode.Win.csproj`
+### Windows Desktop App (MoYuCode.Win)
+- Build: `dotnet build src/MoYuCode.Win/MoYuCode.Win.csproj`
+- Run: `dotnet run --project src/MoYuCode.Win/MoYuCode.Win.csproj`
 - This is a Windows Forms app that hosts the API with a system tray icon
 
 ### Frontend (React)
@@ -32,7 +32,7 @@ To build the complete application with frontend bundled:
 ```bash
 cd web && npm ci && npm run build && cd ..
 # Copy frontend build to backend wwwroot (use xcopy on Windows, rsync on Unix)
-dotnet build src/MyYuCode/MyYuCode.csproj -c Release
+dotnet build src/MoYuCode/MoYuCode.csproj -c Release
 ```
 
 ## Architecture
@@ -95,12 +95,12 @@ The API follows a hybrid architecture with both minimal APIs and traditional con
 - Theme system with dark mode support (`next-themes`)
 - Path alias: `@/` maps to `web/src/`
 
-### MyYuCode.Win (Windows Desktop)
+### MoYuCode.Win (Windows Desktop)
 
-`src/MyYuCode.Win/` is a Windows Forms application that:
-- Hosts the MyYuCode（摸鱼Coding） API as an embedded web server
+`src/MoYuCode.Win/` is a Windows Forms application that:
+- Hosts the MoYuCode（摸鱼Coding） API as an embedded web server
 - Displays a system tray icon for background operation
-- References the main `MyYuCode` project and runs it in-process
+- References the main `MoYuCode` project and runs it in-process
 
 ### Codex Integration Flow
 
@@ -143,16 +143,16 @@ The API follows a hybrid architecture with both minimal APIs and traditional con
 
 ## Database Migrations
 
-Entity Framework Core migrations are in `src/MyYuCode/LogMigrations/`.
+Entity Framework Core migrations are in `src/MoYuCode/LogMigrations/`.
 
 To create a migration:
 ```bash
-dotnet ef migrations add MigrationName --project src/MyYuCode/MyYuCode.csproj --context MyYuCodeDbContext --output-dir LogMigrations
+dotnet ef migrations add MigrationName --project src/MoYuCode/MoYuCode.csproj --context MyYuCodeDbContext --output-dir LogMigrations
 ```
 
 To update the database (runs automatically on app startup):
 ```bash
-dotnet ef database update --project src/MyYuCode/MyYuCode.csproj --context MyYuCodeDbContext
+dotnet ef database update --project src/MoYuCode/MoYuCode.csproj --context MyYuCodeDbContext
 ```
 
 ## Windows-Specific Notes

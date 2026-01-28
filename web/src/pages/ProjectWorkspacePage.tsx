@@ -687,11 +687,11 @@ export const ProjectWorkspacePage = forwardRef<ProjectWorkspaceHandle, ProjectWo
     const originalTitle = document.title
 
     if (project?.name) {
-      // Format: {projectName} - MyYuCode
-      document.title = `${project.name} - MyYuCode`
+      // Format: {projectName} - MoYuCode
+      document.title = `${project.name} - MoYuCode`
     } else if (error || projectNotFound) {
       // Clear title on error
-      document.title = 'MyYuCode'
+      document.title = 'MoYuCode'
     }
 
     // Cleanup: restore original title when component unmounts or project changes
