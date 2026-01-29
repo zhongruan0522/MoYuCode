@@ -88,14 +88,6 @@ jobs:
           for RID in linux-x64 osx-x64; do
             dotnet publish src/MoYuCode/MoYuCode.csproj -c Release -r "${RID}" --self-contained false -o "artifacts/publish/${RID}" -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }}
           done
-          WIN_PUBLISH_ROOT="artifacts/publish/win-x64"
-          rm -rf "${WIN_PUBLISH_ROOT}"
-          mkdir -p "${WIN_PUBLISH_ROOT}"
-          dotnet publish src/MoYuCode.Win/MoYuCode.Win.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=${{ steps.version.outputs.version }} -p:InformationalVersion=${{ steps.version.outputs.version }} -p:DebugType=None -p:DebugSymbols=false -o "${WIN_PUBLISH_ROOT}"
-          if [[ ! -f "${WIN_PUBLISH_ROOT}/MoYuCode.Win.exe" ]]; then
-            echo "MoYuCode.Win.exe not found in win-x64 publish output."
-            exit 1
-          fi
 
       - name: Add platform scripts
         if: github.event_name == 'workflow_dispatch'
@@ -290,7 +282,6 @@ jobs:
           mkdir -p artifacts
           tar -czf "artifacts/MoYuCode-${{ steps.version.outputs.version }}-linux-x64.tar.gz" -C artifacts/publish/linux-x64 .
           tar -czf "artifacts/MoYuCode-${{ steps.version.outputs.version }}-osx-x64.tar.gz" -C artifacts/publish/osx-x64 .
-          (cd artifacts/publish/win-x64 && zip -r "../../MoYuCode-${{ steps.version.outputs.version }}-win-x64.zip" .)
 
       - name: Create release
         if: github.event_name == 'workflow_dispatch'
@@ -304,6 +295,5 @@ jobs:
           ASSETS=(
             "artifacts/MoYuCode-${{ steps.version.outputs.version }}-linux-x64.tar.gz"
             "artifacts/MoYuCode-${{ steps.version.outputs.version }}-osx-x64.tar.gz"
-            "artifacts/MoYuCode-${{ steps.version.outputs.version }}-win-x64.zip"
           )
           gh release create "${TAG}" "${ASSETS[@]}" --title "${TAG}" --notes "${RELEASE_NOTES}" --target "${GITHUB_SHA}"

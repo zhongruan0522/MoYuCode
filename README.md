@@ -25,12 +25,8 @@ MoYuCode（摸鱼Coding） is an open-source tool designed to help users conveni
 - **Token Usage Tracking**: Monitor and visualize token consumption across sessions
 - **Real-time Updates**: Server-Sent Events (SSE) for live AI response streaming
 - **Cross-platform**: Support for Windows, Linux, and macOS
-- **System Tray**: Windows desktop application with tray icon support
 
 ## Screenshots
-
-### System Tray
-After launching MoYuCode.Win.exe, a system tray icon appears with the background service running automatically.
 
 ### Project Selection
 Automatically scans and loads local projects that have used Codex, allowing you to select and enter a workspace.
@@ -45,13 +41,36 @@ Integrated file browser to view and edit code files directly while interacting w
 
 ## Download & Installation
 
-### Windows Desktop Application
+### Docker (Linux server)
 
-1. Visit the [GitHub Releases](https://github.com/AIDotNet/MoYuCode/releases) page
-2. Download the latest Windows archive (`MoYuCode-*-win-x64.zip`)
-3. Extract and run `MoYuCode.Win.exe`
-4. The program will display an icon in the system tray
-5. Open your browser and visit `http://localhost:9110/`
+The repo provides a root `Dockerfile` and `docker-compose.yml`:
+
+```bash
+docker compose up -d --build
+```
+
+Open in browser:
+
+- On the server: `http://127.0.0.1:9110/`
+
+Data is persisted via Docker volumes by default:
+
+- `moyucode-data` -> `/home/app/.myyucode` (MoYuCode config/projects/providers)
+- `moyucode-codex` -> `/home/app/.codex` (Codex config & sessions)
+- `moyucode-claude` -> `/home/app/.claude` (Claude Code config & projects)
+
+Dynamic API key / base URL config (recommended):
+
+- Use the **Providers** page in the UI: set `Address` (Base URL) + `ApiKey`, then pick a Provider per project (URL can be changed anytime).
+- Or use **Tools → Environment** for `codex/claude` env vars (e.g. `OPENAI_API_KEY` / `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`). These settings are stored under the data volume.
+
+The container can only access its own filesystem; mount your code into the container (e.g. `/workspace/...`) and set each project's WorkspacePath to the in-container path.
+
+Local Windows dev (optional):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
 
 ### Linux
 

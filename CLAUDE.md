@@ -15,11 +15,6 @@ MoYuCode（摸鱼Coding） is a dual-stack application providing a web UI for AI
 - Run (HTTPS): `dotnet run --project src/MoYuCode/MoYuCode.csproj --launch-profile https`
   - Runs on `https://localhost:9111`
 
-### Windows Desktop App (MoYuCode.Win)
-- Build: `dotnet build src/MoYuCode.Win/MoYuCode.Win.csproj`
-- Run: `dotnet run --project src/MoYuCode.Win/MoYuCode.Win.csproj`
-- This is a Windows Forms app that hosts the API with a system tray icon
-
 ### Frontend (React)
 All commands should be run from the `web/` directory:
 - Install dependencies: `npm ci`
@@ -94,13 +89,6 @@ The API follows a hybrid architecture with both minimal APIs and traditional con
 - Tailwind CSS v4 with `@tailwindcss/vite` plugin
 - Theme system with dark mode support (`next-themes`)
 - Path alias: `@/` maps to `web/src/`
-
-### MoYuCode.Win (Windows Desktop)
-
-`src/MoYuCode.Win/` is a Windows Forms application that:
-- Hosts the MoYuCode（摸鱼Coding） API as an embedded web server
-- Displays a system tray icon for background operation
-- References the main `MoYuCode` project and runs it in-process
 
 ### Codex Integration Flow
 

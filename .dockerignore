@@ -17,6 +17,8 @@
 **/docker-compose*
 **/Dockerfile*
 **/node_modules
+web/dist
+src/MoYuCode/wwwroot
 **/npm-debug.log
 **/obj
 **/secrets.dev.yaml

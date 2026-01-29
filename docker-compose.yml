@@ -3,4 +3,17 @@ services:
     image: ${DOCKER_REGISTRY-}moyucode
     build:
       context: .
-      dockerfile: src/MoYuCode/Dockerfile
+      dockerfile: Dockerfile
+    ports:
+      # Host:Container
+      - "127.0.0.1:9110:8080"
+    volumes:
+      - moyucode-data:/home/app/.myyucode
+      - moyucode-codex:/home/app/.codex
+      - moyucode-claude:/home/app/.claude
+    restart: unless-stopped
+
+volumes:
+  moyucode-data:
+  moyucode-codex:
+  moyucode-claude:

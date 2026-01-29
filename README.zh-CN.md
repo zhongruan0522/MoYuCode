@@ -25,12 +25,8 @@ MoYuCode（摸鱼Coding）是一款开源工具，旨在帮助用户通过 Web �
 - **Token 使用追踪**：监控和可视化各会话的 Token 消耗
 - **实时更新**：通过服务器推送事件（SSE）实现实时 AI 响应流
 - **跨平台**：支持 Windows、Linux 和 macOS
-- **系统托盘**：Windows 桌面应用程序支持托盘图标
 
 ## 截图
-
-### 系统托盘
-运行 MoYuCode.Win.exe 后，会在系统托盘显示图标，后台服务自动运行。
 
 ### 项目选择
 自动扫描本地已使用 Codex 的项目并加载到界面，用户可选择项目进入工作区。
@@ -45,13 +41,36 @@ MoYuCode（摸鱼Coding）是一款开源工具，旨在帮助用户通过 Web �
 
 ## 下载与安装
 
-### Windows 桌面应用
+### Docker（Linux 服务器）
 
-1. 访问 [GitHub 发布页](https://github.com/AIDotNet/MoYuCode/releases)
-2. 下载最新的 Windows 压缩包（`MoYuCode-*-win-x64.zip`）
-3. 解压后运行 `MoYuCode.Win.exe`
-4. 程序会在系统托盘显示图标
-5. 打开浏览器访问 `http://localhost:9110/`
+仓库根目录提供 `Dockerfile` 和 `docker-compose.yml`，可以直接部署到 Linux 服务器：
+
+```bash
+docker compose up -d --build
+```
+
+然后在浏览器访问：
+
+- 在服务器本机访问：`http://127.0.0.1:9110/`
+
+数据默认通过 Docker volume 持久化：
+
+- `moyucode-data` -> `/home/app/.myyucode`（MoYuCode 配置/项目/Provider 等）
+- `moyucode-codex` -> `/home/app/.codex`（Codex 配置与 sessions）
+- `moyucode-claude` -> `/home/app/.claude`（Claude Code 配置与 projects）
+
+API Key / Base URL 动态配置（推荐）：
+
+- 在 Web UI 的 **Providers** 页面新增 Provider，填 `Address`（Base URL）和 `ApiKey`，然后在项目里选择对应 Provider（随时可改 URL）。
+- 或在 **Tools → Environment** 里给 `codex/claude` 配环境变量（如 `OPENAI_API_KEY` / `OPENAI_BASE_URL`、`ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`）。这些设置会保存到数据目录，重启容器不会丢。
+
+容器只能访问容器内文件系统；如果你要让它操作宿主机代码，请用 volume 挂载到容器（例如挂到 `/workspace/...`），并把项目 WorkspacePath 选到容器内路径。
+
+本地 Windows 调试（可选）：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
 
 ### Linux
 
