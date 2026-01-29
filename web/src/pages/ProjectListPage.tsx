@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/api/client'
-import type { ProjectDto, ToolStatusDto, ToolType } from '@/api/types'
+import type { ProjectDto, ToolKey, ToolStatusDto, ToolType } from '@/api/types'
 import { ProjectSelectionCard } from '@/pages/code/ProjectSelectionCard'
 import { ProjectUpsertModal } from '@/pages/code/ProjectUpsertModal'
 import { Modal } from '@/components/Modal'
@@ -188,7 +188,16 @@ export function ProjectListPage({ mode }: ProjectListPageProps) {
     }
   }, [])
 
-  const [toolStatus, setToolStatus] = useState<ToolStatusDto | null>(null)
+  const toolKey: ToolKey = mode === 'claude' ? 'claude' : 'codex'
+
+  const [toolStatusByKey, setToolStatusByKey] = useState<
+    Record<ToolKey, ToolStatusDto | null>
+  >({
+    codex: null,
+    claude: null,
+  })
+
+  const toolStatus = toolStatusByKey[toolKey]
 
   const [scanning, setScanning] = useState(false)
   const [scanLogs, setScanLogs] = useState<string[]>([])
@@ -305,16 +314,15 @@ export function ProjectListPage({ mode }: ProjectListPageProps) {
 
   const loadToolStatus = useCallback(async (): Promise<ToolStatusDto | null> => {
     try {
-      const toolKey = mode === 'claude' ? 'claude' : 'codex'
       const status = await api.tools.status(toolKey)
-      setToolStatus(status)
+      setToolStatusByKey((prev) => ({ ...prev, [toolKey]: status }))
       return status
     } catch (e) {
       setError((e as Error).message)
-      setToolStatus(null)
+      setToolStatusByKey((prev) => ({ ...prev, [toolKey]: null }))
       return null
     }
-  }, [mode])
+  }, [toolKey])
 
   const appendScanLog = useCallback((line: string) => {
     setScanLogs((prev) => {

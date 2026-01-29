@@ -11,6 +11,7 @@ src/MoYuCode/wwwroot/
 /artifacts
 /src/MoYuCode/wwwroot
 node_modules
+/.dotnet/
 /.vs/MoYuCode.slnx
 *.DotSettings.user
 .vs

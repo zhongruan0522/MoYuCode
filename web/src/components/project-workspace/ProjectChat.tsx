@@ -4460,7 +4460,16 @@ export function ProjectChat({
           {!messages.length && (!sessionId || !historyLoading) && (
             <div className="flex flex-col items-center justify-center min-h-[60vh] px-4 text-center">
               <div className="animate-in fade-in zoom-in duration-700 delay-200">
-                <div className="text-3xl font-bold tracking-tight text-foreground/80 mb-2">MoYu Codex</div>
+                <div className="text-3xl font-bold tracking-tight text-foreground/80 mb-2">
+                  {(routeTool.isClaudeRoute
+                    ? 'ClaudeCode'
+                    : routeTool.isCodexRoute
+                      ? 'Codex'
+                      : (currentToolType ?? project.toolType)
+                  ) === 'ClaudeCode'
+                    ? 'MoYu-ClaudeCode'
+                    : 'MoYu-Codex'}
+                </div>
                 <div className="text-base text-muted-foreground max-w-sm">
                   准备好开始工作了吗？我可以帮你编写代码、分析项目或执行终端命令。
                 </div>
