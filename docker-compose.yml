@@ -4,6 +4,11 @@ services:
     ports:
       # Host:Container
       - "127.0.0.1:9110:8080"
+    environment:
+      MOYU_ADMIN_USERNAME: ${MOYU_ADMIN_USERNAME}
+      MOYU_ADMIN_PASSWORD: ${MOYU_ADMIN_PASSWORD}
+      MOYU_JWT_SIGNING_KEY: ${MOYU_JWT_SIGNING_KEY}
+      MOYU_JWT_EXPIRES_HOURS: ${MOYU_JWT_EXPIRES_HOURS:-24}
     volumes:
       - moyucode-data:/home/app/.myyucode
       - moyucode-codex:/home/app/.codex

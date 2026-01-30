@@ -1,6 +1,8 @@
 import type {
   ApiResponse,
   AppVersionDto,
+  LoginRequest,
+  LoginResponse,
   DriveDto,
   JobDto,
   ListDirectoriesResponse,
@@ -46,6 +48,7 @@ import type {
   ContentSearchRequest,
   ContentSearchResponse,
 } from '@/api/types'
+import { clearToken, getToken } from '@/auth/token'
 
 const API_BASE =''
 
@@ -60,14 +63,40 @@ function isApiResponse(value: unknown): value is ApiResponse<unknown> {
   )
 }
 
+function addAccessTokenToUrl(url: string): string {
+  const token = getToken()
+  if (!token) return url
+
+  try {
+    const base =
+      typeof window !== 'undefined' ? window.location.origin : 'http://localhost'
+    const parsed = new URL(url, base)
+    if (!parsed.searchParams.has('access_token')) {
+      parsed.searchParams.set('access_token', token)
+    }
+    return parsed.toString()
+  } catch {
+    return url
+  }
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getToken()
+
+  const headers = new Headers(init?.headers ?? {})
+  headers.set('content-type', 'application/json')
+  if (token && !headers.has('authorization')) {
+    headers.set('authorization', `Bearer ${token}`)
+  }
+
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      'content-type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
+    headers,
     ...init,
   })
+
+  if (res.status === 401) {
+    clearToken()
+  }
 
   if (res.status === 204) {
     return undefined as T
@@ -102,6 +131,13 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  auth: {
+    login: (body: LoginRequest) =>
+      http<LoginResponse>(`/api/auth/login`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+  },
   app: {
     version: () => http<AppVersionDto>(`/api/version`),
   },
@@ -215,7 +251,9 @@ export const api = {
     },
     scanCodexSessions: (toolType: ToolType) =>
       new EventSource(
-        `${API_BASE}/api/projects/scan-codex-sessions?toolType=${encodeURIComponent(toolType)}`,
+        addAccessTokenToUrl(
+          `${API_BASE}/api/projects/scan-codex-sessions?toolType=${encodeURIComponent(toolType)}`,
+        ),
       ),
   },
   fs: {

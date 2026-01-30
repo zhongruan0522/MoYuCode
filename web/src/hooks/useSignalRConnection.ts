@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as signalR from '@microsoft/signalr';
+import { getToken } from '@/auth/token';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'failed';
 
@@ -43,7 +44,9 @@ export function useSignalRConnection(options: UseSignalRConnectionOptions): UseS
     }
 
     const connection = new signalR.HubConnectionBuilder()
-      .withUrl(hubUrl)
+      .withUrl(hubUrl, {
+        accessTokenFactory: () => getToken() ?? '',
+      })
       .withAutomaticReconnect({
         nextRetryDelayInMilliseconds: (retryContext) => {
           // 指数退避重连策略，最多重试 maxRetries 次

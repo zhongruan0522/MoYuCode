@@ -1,3 +1,5 @@
+import { getToken } from '@/auth/token'
+
 type TerminalMuxConnectionStatus = 'connecting' | 'connected' | 'closed' | 'error'
 
 export type TerminalMuxSessionListener = {
@@ -73,6 +75,18 @@ function toWebSocketUrl(apiBase: string, path: string): string {
   url.pathname = path
   url.search = ''
   return url.toString()
+}
+
+function withAccessToken(wsUrl: string): string {
+  const token = getToken()
+  if (!token) return wsUrl
+  try {
+    const url = new URL(wsUrl)
+    url.searchParams.set('access_token', token)
+    return url.toString()
+  } catch {
+    return wsUrl
+  }
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -207,7 +221,7 @@ export class TerminalMuxClient {
 
     this.notifyConnectionStatus('connecting')
 
-    const ws = new WebSocket(this.wsUrl)
+    const ws = new WebSocket(withAccessToken(this.wsUrl))
     ws.binaryType = 'arraybuffer'
     this.ws = ws
 

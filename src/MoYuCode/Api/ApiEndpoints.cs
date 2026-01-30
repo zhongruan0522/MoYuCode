@@ -26,6 +26,7 @@ public static class ApiEndpoints
         var api = app.MapGroup("/api")
             .AddEndpointFilter<ApiResponseEndpointFilter>();
 
+        api.MapAuth();
         MapTools(api);
         MapJobs(api);
         MapFileSystem(api);

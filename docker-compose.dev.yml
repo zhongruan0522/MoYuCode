@@ -4,6 +4,10 @@ services:
       - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_HTTP_PORTS=8080
       - ASPNETCORE_HTTPS_PORTS=8081
+      - MOYU_ADMIN_USERNAME=${MOYU_ADMIN_USERNAME}
+      - MOYU_ADMIN_PASSWORD=${MOYU_ADMIN_PASSWORD}
+      - MOYU_JWT_SIGNING_KEY=${MOYU_JWT_SIGNING_KEY}
+      - MOYU_JWT_EXPIRES_HOURS=${MOYU_JWT_EXPIRES_HOURS:-24}
     volumes:
       - ${APPDATA}/Microsoft/UserSecrets:/home/app/.microsoft/usersecrets:ro
       - ${APPDATA}/Microsoft/UserSecrets:/root/.microsoft/usersecrets:ro

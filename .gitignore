@@ -15,3 +15,4 @@ node_modules
 /.vs/MoYuCode.slnx
 *.DotSettings.user
 .vs
+.env

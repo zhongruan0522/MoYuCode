@@ -1,9 +1,14 @@
 using System.Text.Json.Serialization;
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.WebSockets;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.IdentityModel.Tokens;
 using MoYuCode.Api;
 using MoYuCode.Data;
 using MoYuCode.Hubs;
+using MoYuCode.Infrastructure.Auth;
 using MoYuCode.Services.A2a;
 using MoYuCode.Services.Codex;
 using MoYuCode.Services.Jobs;
@@ -67,6 +72,56 @@ public static class MoYuCodeApp
                     .AllowAnyHeader()
                     .AllowAnyMethod()
                     .AllowCredentials());
+        });
+
+        var authSettings = AuthSettings.FromConfiguration(builder.Configuration);
+        builder.Services.AddSingleton(authSettings);
+
+        builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+            .AddJwtBearer(options =>
+            {
+                var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(authSettings.JwtSigningKey));
+
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = false,
+                    ValidateAudience = false,
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = signingKey,
+                    ValidateLifetime = true,
+                    ClockSkew = TimeSpan.FromMinutes(1),
+                };
+
+                options.Events = new JwtBearerEvents
+                {
+                    OnMessageReceived = context =>
+                    {
+                        var accessToken = context.Request.Query["access_token"];
+                        if (!string.IsNullOrWhiteSpace(accessToken))
+                        {
+                            // 浏览器原生 WebSocket / EventSource 都无法设置自定义 Authorization Header，
+                            // 这里对 WS 与 SSE 允许通过 query string 传 access_token。
+                            var isWebSocket = context.HttpContext.WebSockets.IsWebSocketRequest;
+                            var accept = context.Request.Headers.Accept.ToString();
+                            var isSse = accept.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase);
+
+                            if (isWebSocket || isSse)
+                            {
+                                context.Token = accessToken;
+                            }
+                        }
+
+                        return Task.CompletedTask;
+                    },
+                };
+            });
+
+        builder.Services.AddAuthorization(options =>
+        {
+            // 默认：所有接口都需要登录（JWT）。需要匿名的接口必须显式 AllowAnonymous。
+            options.FallbackPolicy = new AuthorizationPolicyBuilder()
+                .RequireAuthenticatedUser()
+                .Build();
         });
 
         // Add SignalR
@@ -137,7 +192,7 @@ public static class MoYuCodeApp
                 context.Response.ContentType = "text/html; charset=utf-8";
                 await using var stream = indexFile.CreateReadStream();
                 await stream.CopyToAsync(context.Response.Body);
-            });
+            }).AllowAnonymous();
 
         }
         catch (Exception ex)
@@ -148,6 +203,8 @@ public static class MoYuCodeApp
         app.UseCors();
         app.UseSerilogRequestLogging();
         app.UseWebSockets();
+        app.UseAuthentication();
+        app.UseAuthorization();
 
         // Map all endpoints with /api prefix
         app.MapMyYuCodeApis();

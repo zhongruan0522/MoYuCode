@@ -14,6 +14,17 @@ export type ApiResponse<T> = {
   traceId: string
 }
 
+export type LoginRequest = {
+  username: string
+  password: string
+}
+
+export type LoginResponse = {
+  accessToken: string
+  tokenType: string
+  expiresAtUtc: string
+}
+
 export type AppVersionDto = {
   version: string
   informationalVersion: string | null

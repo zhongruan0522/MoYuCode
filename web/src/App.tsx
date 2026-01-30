@@ -2,28 +2,32 @@ import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import {
   Link,
   Navigate,
+  Outlet,
   Route,
   Routes,
   useLocation,
 } from 'react-router-dom'
+import { ThemeTogglerButton } from '@animate-ui/components-buttons-theme-toggler'
+import { Database, Library, Settings } from 'lucide-react'
+import { api } from '@/api/client'
+import { useToken } from '@/auth/token'
 import { cn } from '@/lib/utils'
+import { LogoBubble } from '@/components/LogoBubble'
+import { OfflineIndicator } from '@/components/OfflineIndicator'
+import { Spinner } from '@/components/ui/spinner'
 import { CodePage } from '@/pages/CodePage'
+import { LoginPage } from '@/pages/LoginPage'
 import { NodeInstallPage } from '@/pages/NodeInstallPage'
-import { ToolPage } from '@/pages/ToolPage'
 import Providers from '@/pages/Providers'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { SkillsPage } from '@/pages/SkillsPage'
 import { AboutSection } from '@/pages/settings/AboutSection'
-import { api } from '@/api/client'
-import { Spinner } from '@/components/ui/spinner'
-import { OfflineIndicator } from '@/components/OfflineIndicator'
+import { ToolPage } from '@/pages/ToolPage'
 
-// Lazy load ProjectWorkspacePage for better performance with multiple instances
 const ProjectWorkspacePage = lazy(() =>
-  import('@/pages/ProjectWorkspacePage').then((m) => ({ default: m.ProjectWorkspacePage }))
+  import('@/pages/ProjectWorkspacePage').then((m) => ({ default: m.ProjectWorkspacePage })),
 )
 
-// Loading fallback for lazy-loaded components
 function PageLoadingFallback() {
   return (
     <div className="flex h-full items-center justify-center">
@@ -34,9 +38,6 @@ function PageLoadingFallback() {
     </div>
   )
 }
-import { ThemeTogglerButton } from '@animate-ui/components-buttons-theme-toggler'
-import { Database, Settings, Library } from 'lucide-react'
-import { LogoBubble } from '@/components/LogoBubble'
 
 function MaskIcon({ src, className }: { src: string; className?: string }) {
   return (
@@ -110,12 +111,23 @@ function compareVersions(left: string, right: string): number {
   return 0
 }
 
-export default function App() {
+function RequireAuth() {
+  const token = useToken()
+  const location = useLocation()
+
+  if (!token) {
+    return <Navigate to="/login" replace state={{ from: location }} />
+  }
+
+  return <Outlet />
+}
+
+function AppLayout() {
   const location = useLocation()
   const [appVersion, setAppVersion] = useState<string | null>(null)
   const [latestVersion, setLatestVersion] = useState<string | null>(null)
   const [updateAvailable, setUpdateAvailable] = useState(false)
-  
+
   const isProjectWorkspace = location.pathname.startsWith('/projects/')
 
   useEffect(() => {
@@ -160,12 +172,12 @@ export default function App() {
 
   return (
     <div className="h-screen overflow-hidden bg-background text-foreground">
-      {/* Task 7.2: Offline indicator */}
       <OfflineIndicator />
 
       <div className="flex h-full w-full">
         <aside className="flex w-16 shrink-0 flex-col items-center border-r bg-card px-2 py-4">
           <LogoBubble />
+
           <nav className="flex flex-col items-center gap-2">
             <NavIconLink
               to="/code"
@@ -201,6 +213,7 @@ export default function App() {
               label="设置"
               icon={<Settings className="size-5" aria-hidden="true" />}
             />
+
             {appVersion ? (
               <div className="mt-1 w-full text-center text-[10px] leading-none text-muted-foreground">
                 <span className="relative inline-flex items-center">
@@ -214,45 +227,55 @@ export default function App() {
           </div>
         </aside>
 
-        <main className={cn(
-          "min-h-0 min-w-0 flex-1",
-          isProjectWorkspace ? "overflow-hidden p-0" : "overflow-y-auto px-4 py-6"
-        )}>
-          <Routes>
-            <Route path="/" element={<Navigate to="/code" replace />} />
-            <Route path="/code" element={<CodePage />} />
-            <Route path="/node" element={<NodeInstallPage />} />
-            <Route path="/codex" element={<ToolPage tool="codex" title="Codex" />} />
-            <Route path="/claude" element={<CodePage />} />
-            <Route
-              path="/claude/tool"
-              element={
-                <ToolPage
-                  tool="claude"
-                  title="Claude Code"
-                  fallbackRoute="/claude"
-                />
-              }
-            />
-            <Route path="/providers" element={<Providers />} />
-            <Route path="/skills" element={<SkillsPage />} />
-            <Route path="/settings" element={<SettingsPage />}>
-              <Route index element={<AboutSection />} />
-              <Route path="about" element={<AboutSection />} />
-            </Route>
-            {/* New direct project workspace route - lazy loaded for multi-instance performance */}
-            <Route
-              path="/projects/:id"
-              element={
-                <Suspense fallback={<PageLoadingFallback />}>
-                  <ProjectWorkspacePage />
-                </Suspense>
-              }
-            />
-            <Route path="*" element={<Navigate to="/code" replace />} />
-          </Routes>
+        <main
+          className={cn(
+            'min-h-0 min-w-0 flex-1',
+            isProjectWorkspace ? 'overflow-hidden p-0' : 'overflow-y-auto px-4 py-6',
+          )}
+        >
+          <Outlet />
         </main>
       </div>
     </div>
   )
 }
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+
+      <Route element={<RequireAuth />}>
+        <Route element={<AppLayout />}>
+          <Route index element={<Navigate to="code" replace />} />
+          <Route path="code" element={<CodePage />} />
+          <Route path="node" element={<NodeInstallPage />} />
+          <Route path="codex" element={<ToolPage tool="codex" title="Codex" />} />
+          <Route path="claude" element={<CodePage />} />
+          <Route
+            path="claude/tool"
+            element={
+              <ToolPage tool="claude" title="Claude Code" fallbackRoute="/claude" />
+            }
+          />
+          <Route path="providers" element={<Providers />} />
+          <Route path="skills" element={<SkillsPage />} />
+          <Route path="settings" element={<SettingsPage />}>
+            <Route index element={<AboutSection />} />
+            <Route path="about" element={<AboutSection />} />
+          </Route>
+          <Route
+            path="projects/:id"
+            element={
+              <Suspense fallback={<PageLoadingFallback />}>
+                <ProjectWorkspacePage />
+              </Suspense>
+            }
+          />
+          <Route path="*" element={<Navigate to="/code" replace />} />
+        </Route>
+      </Route>
+    </Routes>
+  )
+}
+
