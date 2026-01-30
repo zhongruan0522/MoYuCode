@@ -1,9 +1,6 @@
 services:
   moyucode:
-    image: ${DOCKER_REGISTRY-}moyucode
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/zhongruan0522/moyucode:sha-59d1a33
     ports:
       # Host:Container
       - "127.0.0.1:9110:8080"

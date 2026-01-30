@@ -23,9 +23,13 @@ public static class MoYuCodeApp
         args ??= Array.Empty<string>();
         var builder = WebApplication.CreateBuilder(args);
 
+        var appDataRoot = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".myyucode");
+        Directory.CreateDirectory(appDataRoot);
+
         var logDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "myyucode",
+            appDataRoot,
             "logs");
         Directory.CreateDirectory(logDirectory);
         var errorLogPath = Path.Combine(logDirectory, "myyucode-error-.log");
@@ -67,11 +71,6 @@ public static class MoYuCodeApp
 
         // Add SignalR
         builder.Services.AddSignalR();
-
-        var appDataRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".myyucode");
-        Directory.CreateDirectory(appDataRoot);
 
         builder.Services.AddSingleton<JsonDataStore>(sp => new JsonDataStore(appDataRoot));
 
@@ -141,12 +140,9 @@ public static class MoYuCodeApp
             });
 
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-        }
-        finally
-        {
-
+            app.Logger.LogError(ex, "Failed to configure embedded web UI/static files.");
         }
 
         app.UseCors();
