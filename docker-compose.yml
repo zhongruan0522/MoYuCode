@@ -1,6 +1,6 @@
 services:
   moyucode:
-    image: ghcr.io/zhongruan0522/moyucode:sha-59d1a33
+    image: ghcr.io/zhongruan0522/moyucode:latest
     ports:
       # Host:Container
       - "127.0.0.1:9110:8080"
